@@ -46,6 +46,11 @@
   } catch (e) {
     /* 读不到就默认 */
   }
+  // 旧数据只有 cur：已学完 = 第 1 ~ cur-1 课（迁移，不改 cur，不丢进度）。done 是新增字段
+  if (!Array.isArray(progress.done)) {
+    progress.done = [];
+    for (let i = 1; i < progress.cur && i <= Cur.lessons.length; i++) progress.done.push(i);
+  }
   function saveProgress() {
     try {
       localStorage.setItem(PKEY, JSON.stringify(progress));
@@ -76,6 +81,7 @@
     cards:
       '<svg class="i" viewBox="0 0 24 24"><rect x="4" y="6" width="12" height="14" rx="2"/><path d="M8 3h10a2 2 0 0 1 2 2v11"/></svg>',
     ear2: '<svg class="i" viewBox="0 0 24 24"><path d="M9 18c0-3 4-4 4-8a4 4 0 0 0-8 0M15 9a4 4 0 0 1 0 6"/></svg>',
+    back: '<svg class="i" viewBox="0 0 24 24"><path d="M19 12H6M11 6l-6 6 6 6"/></svg>',
     book: '<svg class="i" viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4zM20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg>',
   };
   const EMO = {
@@ -353,69 +359,248 @@
   function stageColor(n) {
     return "var(--s" + n + ")";
   }
-  function homeHTML() {
-    if (finished()) {
-      return (
-        '<div class="top"><span></span><button class="round small" data-act="parent" aria-label="家长">' +
-        I.gear +
-        "</button></div>" +
-        '<div class="home"><div class="stars">🎉🏆🎉</div><button class="big-btn" data-act="replay-all" aria-label="再来一遍">' +
-        I.play +
-        "</button></div>"
-      );
-    }
-    const l = curLesson();
-    let tiles = "";
-    if (l.kind === "review") {
-      tiles += '<div class="tile review">' + I.cards + "</div>";
-      l.weekUnits.slice(0, 6).forEach(function (u) {
-        tiles += '<div class="tile review">' + esc(U[u].g) + "</div>";
-      });
-    } else if (l.units.length) {
-      l.units.forEach(function (u) {
-        tiles += '<div class="tile">' + esc(U[u].g) + "</div>";
-      });
-    } else {
-      l.focus.forEach(function (u) {
-        tiles += '<div class="tile review">' + esc(U[u].g) + "</div>";
-      });
-    }
-    l.newSight.forEach(function (w) {
-      tiles += '<div class="tile sight">' + esc(w) + "</div>";
+  // ==== 首页 = 全局地图（9 个阶段）→ 点阶段看课程方块 ====
+  const STAGE_NAME = [
+    "",
+    "字母的音",
+    "拼短词",
+    "两个字母一个音",
+    "两个辅音连读",
+    "魔法 e",
+    "两个元音一起走",
+    "元音加 r",
+    "滑动的元音",
+    "特殊规则",
+  ];
+  let mapStage = null; // null = 地图；1..9 = 展开某阶段的课程列表
+  function isDone(no) {
+    return progress.done.indexOf(no) >= 0;
+  }
+  // 阶段卡上的代表字母（取自对照表里各阶段最典型的几个）
+  const STAGE_REPS = ["", "s a t", "c·a·t", "sh ch th", "bl cl st", "a_e i_e", "ai ay ee", "ar or er", "oi oy ow", "ph kn wr"];
+  function stageReps(n) {
+    return STAGE_REPS[n];
+  }
+  function stageTest(n) {
+    // 这个阶段最近一次阶段测：null | {ok, score, total}
+    const qs = Quiz.records().quizzes.filter(function (q) {
+      return q.kind === "stage" && q.stage === n;
     });
-    let stages = "";
-    for (let n = 1; n <= 9; n++) {
-      stages +=
-        '<span class="stage' +
-        (n === l.stage ? " on" : n < l.stage ? " past" : "") +
-        '" style="background:' +
-        (n <= l.stage ? stageColor(n) : "") +
-        '">' +
-        n +
-        "</span>";
-    }
+    if (!qs.length) return null;
+    const q = qs[qs.length - 1];
+    return { ok: q.score / q.total >= 0.8, score: q.score, total: q.total };
+  }
+  function lessonTier(no) {
+    // 这课小测 / 周测最近一次的得分档：'' | hi | mid | lo
+    const qs = Quiz.records().quizzes.filter(function (q) {
+      return q.lesson === no && q.kind !== "stage";
+    });
+    if (!qs.length) return "";
+    const q = qs[qs.length - 1],
+      r = q.score / q.total;
+    return r >= 0.8 ? "hi" : r >= 0.6 ? "mid" : "lo";
+  }
+  function stageInfo(n) {
+    const ls = L.filter(function (x) {
+      return x.stage === n;
+    });
+    const done = ls.filter(function (x) {
+      return isDone(x.no);
+    }).length;
+    const hasCur = ls.some(function (x) {
+      return x.no === progress.cur;
+    });
+    const weak = Quiz.stageUnits(n).filter(function (u) {
+      return Quiz.statOf(u).weak;
+    }).length;
+    return {
+      ls: ls,
+      done: done,
+      total: ls.length,
+      state: done === ls.length ? "done" : done > 0 || hasCur ? "on" : "new",
+      cur: hasCur,
+      weak: weak,
+    };
+  }
+  const FLAG =
+    '<svg class="i" viewBox="0 0 24 24"><path d="M6 21V4M6 5h12l-3 4 3 4H6" fill="currentColor"/></svg>';
+  function flagHTML(t) {
+    const cls = t ? (t.ok ? "pass" : "fail") : "none";
     return (
-      '<div class="top"><span></span><button class="round small" data-act="parent" aria-label="家长">' +
+      '<span class="flag ' +
+      cls +
+      '" title="' +
+      (t ? "阶段测 " + t.score + "/" + t.total : "阶段测还没做") +
+      '">' +
+      FLAG +
+      "</span>"
+    );
+  }
+  function stageCardHTML(n) {
+    const s = stageInfo(n);
+    const st = stageTest(n);
+    return (
+      '<button class="scard ' +
+      s.state +
+      (s.cur ? " cur" : "") +
+      '" data-act="stage" data-n="' +
+      n +
+      '" style="--c:' +
+      stageColor(n) +
+      '" aria-label="阶段 ' +
+      n +
+      " " +
+      esc(STAGE_NAME[n]) +
+      '">' +
+      '<span class="shead"><span class="snum">' +
+      (s.state === "done" ? I.check : n) +
+      '</span><span class="sstate">' +
+      (s.state === "on" ? I.play : "") +
+      "</span>" +
+      flagHTML(st) +
+      (s.weak
+        ? '<span class="weak" data-act="mastery" title="薄弱音">⚠' +
+          s.weak +
+          "</span>"
+        : "") +
+      "</span>" +
+      '<span class="sname">' +
+      esc(STAGE_NAME[n]) +
+      "</span>" +
+      '<span class="sreps">' +
+      esc(stageReps(n)) +
+      "</span>" +
+      '<span class="sprog"><span class="sbar"><i style="width:' +
+      Math.round((s.done / s.total) * 100) +
+      '%"></i></span><b>' +
+      s.done +
+      "/" +
+      s.total +
+      "</b></span></button>"
+    );
+  }
+  function lessonSquareHTML(l) {
+    const tier = lessonTier(l.no);
+    const g = (l.units.length ? l.units : l.focus.slice(0, 2))
+      .slice(0, 2)
+      .map(function (u) {
+        return U[u].g;
+      })
+      .join(" ");
+    return (
+      '<button class="lsq' +
+      (isDone(l.no) ? " done" : "") +
+      (tier ? " t-" + tier : "") +
+      (l.kind === "review" ? " rev" : "") +
+      (l.no === progress.cur ? " cur" : "") +
+      '" data-act="enter" data-n="' +
+      l.no +
+      '" aria-label="第 ' +
+      l.no +
+      ' 课">' +
+      '<span class="lno">' +
+      l.no +
+      "</span>" +
+      '<span class="lg">' +
+      (l.kind === "review" ? I.cards : esc(g)) +
+      "</span>" +
+      (isDone(l.no) ? '<span class="lmark">' + I.check + "</span>" : "") +
+      (Quiz.isStageLast(l) ? '<span class="lflag">' + FLAG + "</span>" : "") +
+      "</button>"
+    );
+  }
+  function stageViewHTML(n) {
+    const s = stageInfo(n);
+    return (
+      '<div class="top"><button class="round" data-act="map" aria-label="回地图">' +
+      I.back +
+      '</button><span class="stitle" style="--c:' +
+      stageColor(n) +
+      '"><span class="snum">' +
+      n +
+      "</span>" +
+      esc(STAGE_NAME[n]) +
+      "<b>" +
+      s.done +
+      "/" +
+      s.total +
+      "</b></span>" +
+      flagHTML(stageTest(n)) +
+      "</div>" +
+      '<div class="lgrid" style="--c:' +
+      stageColor(n) +
+      '">' +
+      s.ls.map(lessonSquareHTML).join("") +
+      "</div>"
+    );
+  }
+  function homeHTML() {
+    if (mapStage) return stageViewHTML(mapStage);
+    const doneN = progress.done.length;
+    const pctN = Math.round((doneN / L.length) * 100);
+    let hero;
+    if (finished()) {
+      hero =
+        '<div class="hero"><button class="go" data-act="replay-all" aria-label="再来一遍"><span class="gplay">' +
+        I.play +
+        '</span><span class="gtxt">🎉🏆🎉</span></button></div>';
+    } else {
+      const l = curLesson();
+      let tiles = "";
+      if (l.kind === "review") {
+        tiles += '<span class="tile review">' + I.cards + "</span>";
+        l.weekUnits.slice(0, 5).forEach(function (u) {
+          tiles += '<span class="tile review">' + esc(U[u].g) + "</span>";
+        });
+      } else {
+        (l.units.length ? l.units : l.focus).forEach(function (u) {
+          tiles +=
+            '<span class="tile' +
+            (l.units.length ? "" : " review") +
+            '">' +
+            esc(U[u].g) +
+            "</span>";
+        });
+      }
+      l.newSight.forEach(function (w) {
+        tiles += '<span class="tile sight">' + esc(w) + "</span>";
+      });
+      hero =
+        '<div class="hero"><button class="go" data-act="start" aria-label="继续第 ' +
+        l.no +
+        ' 课" style="--c:' +
+        stageColor(l.stage) +
+        '"><span class="gplay">' +
+        I.play +
+        '</span><span class="gtxt">' +
+        (l.kind === "review" ? "🔁 " : "") +
+        "<b>" +
+        l.no +
+        '</b></span><span class="gtiles">' +
+        tiles +
+        "</span></button></div>";
+    }
+    let cards = "";
+    for (let n = 1; n <= 9; n++) cards += stageCardHTML(n);
+    return (
+      '<div class="top"><div class="total" aria-label="总进度 ' +
+      doneN +
+      " / " +
+      L.length +
+      '"><b>' +
+      doneN +
+      "</b><span>/ " +
+      L.length +
+      '</span><span class="tbar"><i style="width:' +
+      pctN +
+      '%"></i></span><em>' +
+      pctN +
+      '%</em></div><button class="round small" data-act="parent" aria-label="家长">' +
       I.gear +
       "</button></div>" +
-      '<div class="home">' +
-      '<div class="today">' +
-      (l.kind === "review" ? "🔁 " : "") +
-      "第<b>" +
-      l.no +
-      "</b>课</div>" +
-      '<div class="tiles">' +
-      tiles +
-      "</div>" +
-      '<button class="big-btn" data-act="start" aria-label="开始">' +
-      I.play +
-      "</button>" +
-      '<div class="stages" aria-hidden="true">' +
-      stages +
-      "</div>" +
-      '<div class="bar" aria-hidden="true"><i style="width:' +
-      Math.round(((progress.cur - 1) / L.length) * 100) +
-      '%"></i></div>' +
+      hero +
+      '<div class="smap">' +
+      cards +
       "</div>"
     );
   }
@@ -931,7 +1116,7 @@
   // ==== 掌握情况页（家长）====
   function pct(s) { return s.n ? Math.round(s.rate * 100) + "%" : "—"; }
   function masteryHTML() {
-    const done = Math.max(0, progress.cur - 1);
+    const done = progress.done.length;
     const st = Quiz.allStats(progress.cur);
     const weak = st.filter(function (s) { return s.weak; });
     const rows = st.map(function (s) {
@@ -1016,6 +1201,7 @@
     saveProgress();
     S = null;
     overlay = null;
+    mapStage = null;
     render();
   }
   const actions = {
@@ -1024,6 +1210,7 @@
     },
     "replay-all": function () {
       progress.cur = 1;
+      progress.done = [];
       saveProgress();
       render();
     },
@@ -1031,7 +1218,19 @@
       slowToken++;
       Snd.stopAll();
       S = null;
+      mapStage = null;
       render();
+    },
+    stage: function (el) {
+      mapStage = +el.dataset.n;
+      render();
+    },
+    map: function () {
+      mapStage = null;
+      render();
+    },
+    enter: function (el) {
+      startLesson(L[+el.dataset.n - 1]); // 直接进这一课，不改「当前课」，已学完的标记也不动
     },
     parent: function () {
       overlay = "parent";
@@ -1094,8 +1293,10 @@
     },
     finish: function () {
       if (S.L.no >= progress.cur) progress.cur = S.L.no + 1;
+      if (progress.done.indexOf(S.L.no) < 0) progress.done.push(S.L.no);
       saveProgress();
       S = null;
+      mapStage = null;
       render();
     },
     again: function () {
@@ -1140,6 +1341,7 @@
       }
       resetArm = false;
       progress.cur = 1;
+      progress.done = [];
       saveProgress();
       S = null;
       overlay = null;
