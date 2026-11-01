@@ -1,5 +1,5 @@
 /* quiz.js —— 出题、成绩记录、掌握情况汇总、「复制给老师」文本
- * 负责：三种题（听音选字母 / 听词选词 / 读给家长听）的生成；每个音的答题记录（localStorage）；弱项判定；汇总文本。
+ * 负责：三种题（听音选字母 / 听词选词 / 读给家长听）的生成（选项 3 个；听词选词配图）；示范题是否看过；每个音的答题记录（localStorage）；弱项判定；汇总文本。
  * 不负责：界面与交互（app.js）。
  * 块顺序：记录 → 出题工具 → 三种题 → 一套卷子（小测 / 周测 / 阶段测）→ 汇总
  */
@@ -35,6 +35,24 @@
     rec.quizzes.push(Object.assign({ ts: Date.now() }, meta));
     if (rec.quizzes.length > 200) rec.quizzes.shift();
     save();
+  }
+  // 示范题看过没有：每种题型第一次出现演一遍，记在 localStorage（读写全部 try/catch）
+  const DEMO_KEY = "phonics.quizdemo.v1";
+  function demoSeen(type) {
+    try {
+      return !!JSON.parse(localStorage.getItem(DEMO_KEY) || "{}")[type];
+    } catch (e) {
+      return false;
+    }
+  }
+  function markDemoSeen(type) {
+    try {
+      const o = JSON.parse(localStorage.getItem(DEMO_KEY) || "{}");
+      o[type] = 1;
+      localStorage.setItem(DEMO_KEY, JSON.stringify(o));
+    } catch (e) {
+      /* 存不了就下次再演一遍 */
+    }
   }
   function resetRecords() {
     rec = { units: {}, quizzes: [] };
@@ -159,7 +177,7 @@
       });
   }
 
-  // ==== 题型 1：听音选字母（选项里不放同音、同形的，避免有两个都对）====
+  // ==== 题型 1：听音选字母（选项 3 个；选项里不放同音、同形的，避免有两个都对；学过的字母不够 3 个时有几个放几个）====
   function qSound(uid, ctx) {
     const u = U[uid];
     const pool = learnedUnits(ctx.no)
@@ -173,7 +191,7 @@
     seenG[u.g] = 1;
     const opts = [u];
     shuffle(pool).forEach(function (x) {
-      if (opts.length < 4 && !seenG[x.g]) {
+      if (opts.length < 3 && !seenG[x.g]) {
         seenG[x.g] = 1;
         opts.push(x);
       }
@@ -184,6 +202,7 @@
       type: "sound",
       tags: [uid],
       snd: u.snd,
+      label: "/" + u.g + "/",
       options: o.map(function (x) {
         return { text: x.g, id: x.id };
       }),
@@ -191,7 +210,13 @@
     };
   }
 
-  // ==== 题型 2：听词选词（干扰项和答案只差一个音）====
+  // ==== 题型 2：听词选词（选项 3 个、每个都配 emoji 图；答案与干扰项必须有图，没图的词不进这类题）====
+  // 小测 / 周测：干扰项选「差得远」的词（首字母、尾字母都不同，图也不同）；
+  // 阶段测（hard）：才用只差一个音的词（cat / cap），那是最难的辨音，有图配图、没图只出字
+  const EMO = Cur.EMO;
+  function emoOf(w) {
+    return EMO[w.text.toLowerCase()] || "";
+  }
   function oneDiff(a, b) {
     if (a.segs.length !== b.segs.length || a.text === b.text) return false;
     let d = 0;
@@ -199,40 +224,62 @@
       if (a.segs[i].t !== b.segs[i].t) d++;
     return d === 1;
   }
-  function qWord(uid, ctx) {
-    const base = (UW[uid] || []).filter(function (w) {
-      return ctx.poolTexts[w.text] && ctx.pool.some(function (p) {
-        return oneDiff(w, p);
+  function farApart(a, b) {
+    return (
+      a.text[0] !== b.text[0] &&
+      a.text[a.text.length - 1] !== b.text[b.text.length - 1] &&
+      emoOf(a) !== emoOf(b)
+    );
+  }
+  function qWord(uid, ctx, hard) {
+    const withPic = function (w) {
+      return !!emoOf(w);
+    };
+    const near = function (w) {
+      return ctx.pool.filter(function (p) {
+        return hard ? oneDiff(w, p) : withPic(p) && farApart(w, p);
       });
+    };
+    const base = (UW[uid] || []).filter(function (w) {
+      if (!ctx.poolTexts[w.text]) return false;
+      if (hard) return near(w).length >= 1;
+      return withPic(w) && uniqByText(near(w)).length >= 2;
     });
     if (!base.length) return null;
     const w = pick(base);
-    let near = shuffle(
-      ctx.pool.filter(function (p) {
-        return oneDiff(w, p);
-      }),
-    );
     const seen = {};
     seen[w.text] = 1;
-    near = near
+    const ds = shuffle(near(w))
       .filter(function (p) {
         if (seen[p.text]) return false;
         seen[p.text] = 1;
         return true;
-      })
-      .slice(0, 2);
-    if (near.length < 1) return null;
-    const o = shuffle([w].concat(near));
+      });
+    // 干扰项之间也要差得远，免得两个干扰项互相像
+    const picked = [];
+    ds.forEach(function (p) {
+      if (picked.length < 2 && (hard || picked.every(function (x) { return farApart(x, p); }))) picked.push(p);
+    });
+    if (picked.length < (hard ? 1 : 2)) return null;
+    const o = shuffle([w].concat(picked));
     return {
       type: "word",
       tags: [uid],
       text: w.text,
       segs: w.segs,
       options: o.map(function (x) {
-        return { text: x.text };
+        return { text: x.text, emoji: emoOf(x) };
       }),
       answer: o.indexOf(w),
     };
+  }
+  function uniqByText(a) {
+    const seen = {};
+    return a.filter(function (p) {
+      if (seen[p.text]) return false;
+      seen[p.text] = 1;
+      return true;
+    });
   }
 
   // ==== 题型 3：读给家长听（可含「外星词」：把真词里的一个音换成别的词里的同位置的音）====
@@ -300,12 +347,12 @@
     });
     return { no: no, pool: pool, poolTexts: pt, used: {} };
   }
-  function ask(kind, uid, ctx, alien) {
+  function ask(kind, uid, ctx, alien, hard) {
     let q =
       kind === "sound"
         ? qSound(uid, ctx)
         : kind === "word"
-          ? qWord(uid, ctx)
+          ? qWord(uid, ctx, hard)
           : qRead(uid, ctx, alien);
     if (!q) q = qSound(uid, ctx) || qRead(uid, ctx, false);
     return q;
@@ -341,10 +388,23 @@
       const types = ["sound", "word", "read"];
       list.forEach(function (uid, i) {
         const t = types[i % 3];
-        out.push(ask(t, uid, ctx, t === "read" && Math.floor(i / 3) % 2 === 1));
+        out.push(ask(t, uid, ctx, t === "read" && Math.floor(i / 3) % 2 === 1, kind === "stage"));
       });
     }
     return out.filter(Boolean);
+  }
+  // 示范题：同一种题型，但用一个「不是真题要考的音」，免得示范把答案剧透了；不记录成绩
+  function demoQuestion(type, l, avoidUids) {
+    const ctx = makeCtx(l.no);
+    const all = shuffle(learnedUnits(l.no));
+    const sorted = all
+      .filter(function (u) { return (avoidUids || []).indexOf(u) < 0; })
+      .concat(all.filter(function (u) { return (avoidUids || []).indexOf(u) >= 0; }));
+    for (let i = 0; i < sorted.length; i++) {
+      const q = type === "sound" ? qSound(sorted[i], ctx) : type === "word" ? qWord(sorted[i], ctx, false) : qRead(sorted[i], ctx, false);
+      if (q) return q;
+    }
+    return null;
   }
   function stageUnits(stage) {
     const out = [];
@@ -513,6 +573,9 @@
 
   G.Quiz = {
     build: build,
+    demoQuestion: demoQuestion,
+    demoSeen: demoSeen,
+    markDemoSeen: markDemoSeen,
     isStageLast: isStageLast,
     stageUnits: stageUnits,
     addAnswer: addAnswer,

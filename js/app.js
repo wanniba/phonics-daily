@@ -84,130 +84,7 @@
     back: '<svg class="i" viewBox="0 0 24 24"><path d="M19 12H6M11 6l-6 6 6 6"/></svg>',
     book: '<svg class="i" viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4zM20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg>',
   };
-  const EMO = {
-    sun: "☀️",
-    apple: "🍎",
-    cat: "🐱",
-    pig: "🐷",
-    pen: "🖊️",
-    insect: "🐛",
-    net: "🥅",
-    nut: "🥜",
-    kid: "🧒",
-    egg: "🥚",
-    bed: "🛏️",
-    hat: "👒",
-    hen: "🐔",
-    red: "🟥",
-    run: "🏃",
-    mum: "👩",
-    map: "🗺️",
-    dog: "🐶",
-    dad: "👨",
-    goat: "🐐",
-    octopus: "🐙",
-    hot: "🥵",
-    umbrella: "☂️",
-    cup: "☕",
-    leg: "🦵",
-    lip: "👄",
-    fish: "🐟",
-    bus: "🚌",
-    van: "🚐",
-    web: "🕸️",
-    wet: "💧",
-    box: "📦",
-    fox: "🦊",
-    queen: "👑",
-    ship: "🚢",
-    shop: "🏪",
-    chip: "🍟",
-    ring: "💍",
-    king: "🤴",
-    bell: "🔔",
-    duck: "🦆",
-    sock: "🧦",
-    rain: "🌧️",
-    tree: "🌳",
-    boat: "⛵",
-    coat: "🧥",
-    moon: "🌙",
-    book: "📖",
-    car: "🚗",
-    star: "⭐",
-    fork: "🍴",
-    horse: "🐴",
-    bird: "🐦",
-    ear: "👂",
-    bear: "🐻",
-    pear: "🍐",
-    chair: "🪑",
-    coin: "🪙",
-    boy: "👦",
-    toy: "🧸",
-    house: "🏠",
-    cloud: "☁️",
-    cow: "🐄",
-    saw: "🪚",
-    paw: "🐾",
-    phone: "📱",
-    thumb: "👍",
-    lamb: "🐑",
-    dolphin: "🐬",
-    city: "🏙️",
-    ice: "🧊",
-    face: "😀",
-    gem: "💎",
-    snow: "❄️",
-    sea: "🌊",
-    tea: "🍵",
-    leaf: "🍃",
-    pie: "🥧",
-    fly: "🪰",
-    light: "💡",
-    blue: "🟦",
-    zoo: "🦁",
-    pool: "🏊",
-    spoon: "🥄",
-    flag: "🚩",
-    clock: "🕐",
-    drum: "🥁",
-    frog: "🐸",
-    crab: "🦀",
-    truck: "🚚",
-    swim: "🏊",
-    kite: "🪁",
-    bike: "🚲",
-    cake: "🎂",
-    game: "🎮",
-    home: "🏠",
-    bone: "🦴",
-    nose: "👃",
-    cute: "🥰",
-    jam: "🍓",
-    jet: "✈️",
-    bug: "🐞",
-    bat: "🦇",
-    bun: "🍞",
-    six: "6️⃣",
-    sing: "🎤",
-    pink: "🩷",
-    tent: "⛺",
-    nest: "🪺",
-    hand: "✋",
-    camp: "⛺",
-    lunch: "🍱",
-    hut: "🛖",
-    log: "🪵",
-    pot: "🍲",
-    table: "🪑",
-    apple2: "🍏",
-    plum: "🍑",
-    crown: "👑",
-    brush: "🪥",
-    sled: "🛷",
-    snap: "🫰",
-  };
+  const EMO = Cur.EMO; // 词 → emoji（数据在 curriculum.js，听词选词与拼读页共用）
 
   // 例词里把本音的字母标成粉色
   function altsFor(u) {
@@ -334,7 +211,7 @@
   }
   function goStep(n) {
     slowToken++;
-    Snd.stopAll();
+    stopOwl();
     S.si = n;
     S.wi = 0;
     S.di = 0;
@@ -352,7 +229,43 @@
   }
   function autoplayFirst() {
     const us = learnUnits(S.L);
-    if (us.length && us.length <= 2) Snd.tone(us[0].snd);
+    if (!(us.length && us.length <= 2)) return;
+    const w = S.L.newSight[0];
+    if (w) owlSay([{ snd: us[0].snd }, { zh: sightWhy(w) }]);
+    else Snd.tone(us[0].snd);
+  }
+
+  // ==== 常见词收集：点 3 次收进收集册（phonics.sight.v1 = {词: 点过几次}）====
+  const SIGHT_KEY = "phonics.sight.v1";
+  let sightTaps = {};
+  try { sightTaps = JSON.parse(localStorage.getItem(SIGHT_KEY) || "{}") || {}; } catch (e) { /* 读不到就从 0 开始 */ }
+  function sightCount(w) { return Math.min(3, sightTaps[w] || 0); }
+  function sightTap(w) {
+    sightTaps[w] = sightCount(w) + 1;
+    try { localStorage.setItem(SIGHT_KEY, JSON.stringify(sightTaps)); } catch (e) { /* 存不了也照常用 */ }
+    return sightCount(w);
+  }
+  // 常见词：只把不按规矩读的那一段字母上色
+  function sightHTML(w) {
+    return Cur.sightParts(w).map(function (p) {
+      return p.irr ? '<span class="irr">' + esc(p.t) + "</span>" : "<span>" + esc(p.t) + "</span>";
+    }).join("");
+  }
+  function sightWhy(w) {
+    if (w.length === 1) return "这个词只有一个字母，是个常见词，看熟就好。";
+    return Cur.SIGHT_IRR[w] ? "这个词有个字母不按规矩读，看熟就好。" : "这是个常见词，看熟就好。";
+  }
+  function sightCardHTML(w) {
+    const n = sightCount(w);
+    let slots = "";
+    for (let i = 0; i < 3; i++) slots += "<i" + (i < n ? ' class="f"' : "") + "></i>";
+    const shelf = Cur.SIGHT1.concat(Cur.SIGHT2).filter(function (x) { return sightCount(x) >= 3; });
+    return '<div class="sightbox">' +
+      owlRow(n >= 3 ? "收集到啦！" : esc(sightWhy(w)), n >= 3 ? "happy" : "") +
+      '<button class="coll" data-act="sight-say" data-w="' + esc(w) + '" aria-label="' + esc(w) + '"><span class="letters">' + sightHTML(w) + "</span></button>" +
+      '<div class="slots" aria-label="收集进度 ' + n + ' / 3">' + slots + "</div>" +
+      (shelf.length ? '<div class="shelf">收集册 ' + shelf.map(function (x) { return '<span class="mini">' + esc(x) + "</span>"; }).join("") + "</div>" : "") +
+      "</div>";
   }
 
   // ==== 首页 ====
@@ -563,7 +476,7 @@
         });
       }
       l.newSight.forEach(function (w) {
-        tiles += '<span class="tile sight">' + esc(w) + "</span>";
+        tiles += '<span class="tile sight">' + sightHTML(w) + "</span>";
       });
       hero =
         '<div class="hero"><button class="go" data-act="start" aria-label="继续第 ' +
@@ -650,11 +563,8 @@
   // ==== 步骤 ① 复习闪卡 ====
   function flashHTML() {
     const c = S.deck[S.di];
-    const face = c.type === "unit" ? esc(c.u.g) : esc(c.w);
-    const cls =
-      c.type === "sight"
-        ? ' style="color:var(--pink);font-size:clamp(70px,18vw,120px)"'
-        : "";
+    const face = c.type === "unit" ? esc(c.u.g) : sightHTML(c.w);
+    const cls = c.type === "sight" ? ' style="font-size:clamp(90px,22vw,150px)"' : "";
     return (
       topbar() +
       '<div class="stage-body"><button class="flash" data-act="flash-hear"' +
@@ -771,22 +681,7 @@
           .join("") +
         "</div>";
     }
-    if (l.newSight.length) {
-      body +=
-        '<div class="sightrow">' +
-        l.newSight
-          .map(function (w) {
-            return (
-              '<button class="sightw" data-act="say" data-w="' +
-              esc(w) +
-              '">' +
-              esc(w) +
-              "</button>"
-            );
-          })
-          .join("") +
-        "</div>";
-    }
+    if (l.newSight.length) body += sightCardHTML(l.newSight[0]);
     return (
       topbar() +
       '<div class="stage-body">' +
@@ -993,14 +888,85 @@
     );
   }
 
+  // ==== 猫头鹰（小测里的向导）：说话时气泡里同时显示中文字；没有中文声音就只显示文字 ====
+  let talking = false;
+  let owlTk = 0;
+  function owlSVG(cls) {
+    return '<svg class="owl ' + (cls || "") + (talking ? " talking" : "") + '" viewBox="0 0 120 150" aria-hidden="true">' +
+      '<path d="M20 44L28 12 50 30z" fill="#8a5a33"/><path d="M100 44L92 12 70 30z" fill="#8a5a33"/>' +
+      '<ellipse cx="14" cy="96" rx="11" ry="26" fill="#8a5a33"/><ellipse cx="106" cy="96" rx="11" ry="26" fill="#8a5a33"/>' +
+      '<ellipse cx="60" cy="88" rx="46" ry="54" fill="#a9794a"/><ellipse cx="60" cy="106" rx="30" ry="34" fill="#f3dcb4"/>' +
+      '<circle cx="40" cy="66" r="21" fill="#fff"/><circle cx="80" cy="66" r="21" fill="#fff"/>' +
+      '<circle cx="43" cy="68" r="10" fill="#2b2b3a"/><circle cx="77" cy="68" r="10" fill="#2b2b3a"/>' +
+      '<circle cx="47" cy="64" r="3.5" fill="#fff"/><circle cx="81" cy="64" r="3.5" fill="#fff"/>' +
+      '<circle class="cheek" cx="22" cy="86" r="8" fill="#ff9db8"/><circle class="cheek" cx="98" cy="86" r="8" fill="#ff9db8"/>' +
+      '<g class="beak"><path d="M51 80h18l-9 16z" fill="#ff9f1c"/></g>' +
+      '<path d="M44 140l-6 8M54 142l-2 8M66 142l2 8M76 140l6 8" stroke="#ff9f1c" stroke-width="4" stroke-linecap="round"/></svg>';
+  }
+  function owlRow(bubble, cls) {
+    return '<div class="owlrow"><button class="owlbtn" data-act="owl" aria-label="猫头鹰：点我再说一遍">' + owlSVG(cls) +
+      '</button><div class="bubble">' + bubble + "</div></div>";
+  }
+  function setTalking(on) {
+    talking = on;
+    $app.querySelectorAll(".owl").forEach(function (o) { o.classList.toggle("talking", on); });
+  }
+  function setBubble(h) {
+    const b = $app.querySelector(".bubble");
+    if (b) b.innerHTML = h;
+  }
+  function stopOwl() {
+    owlTk++;
+    setTalking(false);
+    Snd.stopAll();
+  }
+  // 猫头鹰说一串（steps 见 Snd.seq）：中文步开口时气泡换成那句话（或 b）。⭐ 要保证出声，必须在点击事件里同步调用
+  function owlSay(steps, done) {
+    const tk = ++owlTk;
+    setTalking(true);
+    const st = steps.map(function (s) {
+      return Object.assign({}, s, {
+        on: function () {
+          if (tk !== owlTk) return;
+          if (s.b || s.zh) setBubble(s.b || esc(s.zh));
+          s.on && s.on();
+        },
+      });
+    });
+    Snd.seq(st).then(function (finished) {
+      if (tk !== owlTk || !finished) return;
+      setTalking(false);
+      done && done();
+    });
+  }
+  function ph(t) { return '<span class="ph">' + esc(t) + "</span>"; }
+  function pulseSnd() {
+    const b = $app.querySelector(".qsnd");
+    if (b) { b.classList.remove("pulse"); void b.offsetWidth; b.classList.add("pulse"); }
+  }
+
   // ==== 小测（每课 6 题 / 周测 10 题 / 阶段测 12 题）====
-  // S.q = { kind, list, qi, tries, locked, firstOk[], wrongTags[], phase: 'ask' | 'demo' | 'result' }
+  // S.q = { kind, list, qi, tries, locked, heard, firstOk[], wrongTags[], disabled[], reveal,
+  //         phase: 'start' | 'demo' | 'ask' | 'spell' | 'result', dm: 示范状态 }
+  //   heard = 本次小测的孩子已经亲手点过「点我开始听」：只有第一道要点，之后每题自动播
+  //   phase 'start' = 小测开始前（猫头鹰 + 开始钮 + 左下角家长陪做）；'spell' = 读错后把词拆开一个音一个音读
+  const PARENT_KEY = "phonics.quizparent.v1";
+  let parentOpen = true;
+  try { parentOpen = localStorage.getItem(PARENT_KEY) !== "0"; } catch (e) { /* 读不到就展开 */ }
+  const ZH = {
+    begin: "今天做个小测：听声音，选答案！",
+    tapFirst: "点一下，开始听！",
+    tapFirstSay: "点一下蓝色按钮，开始听！",
+    listen: "听一听，是哪一个？",
+    read: "把这个词读给爸爸妈妈听！",
+    demoIntro: "我先做一次给你看。",
+  };
   function quizKind() { return curStep() === "stage" ? "stage" : S.L.kind === "review" ? "week" : "lesson"; }
   function startQuiz() {
     const kind = quizKind();
     const list = Quiz.build(S.L, kind);
     if (!list.length) { goStep(S.si + 1); return; }
-    S.q = { kind: kind, list: list, qi: 0, tries: 0, locked: false, firstOk: [], wrongTags: [], phase: "ask" };
+    S.q = { kind: kind, list: list, qi: 0, tries: 0, locked: false, heard: false, firstOk: [], wrongTags: [], disabled: [], reveal: false, phase: "start", dm: null };
     const ids = [];
     list.forEach(function (q) {
       if (q.snd) [].concat(q.snd).forEach(function (x) { ids.push(x); });
@@ -1008,33 +974,135 @@
     });
     Snd.preload(ids);
     render();
-    autoQ();
   }
+  function curQ() { return S.q.list[S.q.qi]; }
+  // 开始钮：猫头鹰先说（在点击里），然后看这道题的题型要不要先演示
+  function quizBegin() {
+    const Q = S.q;
+    if (!Quiz.demoSeen(curQ().type)) beginDemo([curQ().type], "ask");
+    else { Q.phase = "ask"; render(); }
+  }
+  // 当前题要不要先出示范（这个题型第一次出现）
+  function enterQuestion() {
+    const Q = S.q, q = curQ();
+    if (!Quiz.demoSeen(q.type)) { beginDemo([q.type], "ask"); return; }
+    Q.phase = "ask";
+    render();
+    if (q.type !== "read" && Q.heard) autoQ(); // 点过按钮之后，后面每题自动播
+  }
+
+  // ---- 示范题：猫头鹰自己做一遍（只看，不记成绩）----
+  function beginDemo(types, ret) {
+    const Q = S.q;
+    Q.dm = { types: types, i: 0, ret: ret, q: null, done: false, step: 0 };
+    Q.phase = "demo";
+    loadDemo();
+  }
+  function loadDemo() {
+    const Q = S.q, dm = Q.dm;
+    const type = dm.types[dm.i];
+    const avoid = [];
+    Q.list.forEach(function (x) { if (x.type === type) avoid.push(x.tags[0]); });
+    dm.q = Quiz.demoQuestion(type, S.L, avoid);
+    dm.done = false; dm.step = 0;
+    if (!dm.q) { demoNext(); return; } // 做不出示范（该题型这个阶段出不了）就跳过
+    Quiz.markDemoSeen(type);
+    render();
+    runDemo();
+  }
+  function runDemo() {
+    const Q = S.q, dm = Q.dm, q = dm.q;
+    const mark = function (n) { return function () { dm.step = n; if (n === 1) pulseSnd(); if (n === 2) { const o = $app.querySelectorAll(".opt")[q.answer]; o && o.classList.add("pointed"); } }; };
+    const finish = function () { const b = $app.querySelector(".bubble"); if (b) dm.bubble = b.innerHTML; dm.done = true; dm.step = 2; render(); };
+    if (q.type === "sound") {
+      owlSay([
+        { zh: ZH.demoIntro },
+        { zh: "听——", nodwell: true },
+        { snd: q.snd, b: "🔊 " + ph(q.label), on: mark(1) },
+        { zh: "我听到这个音，所以选这个字母。", b: "我听到 " + ph(q.label) + "，所以选 <b>" + esc(q.options[q.answer].text) + "</b>", on: mark(2) },
+      ], finish);
+    } else if (q.type === "word") {
+      owlSay([
+        { zh: ZH.demoIntro },
+        { zh: "听——", nodwell: true },
+        { en: q.text, b: "🔊 " + ph(q.text), on: mark(1) },
+        { zh: "我听到的是这个词，所以选这张图。", b: "我听到 " + ph(q.text) + "，所以选 " + q.options[q.answer].emoji, on: mark(2) },
+      ], finish);
+    } else {
+      owlSay([
+        { zh: ZH.demoIntro },
+        { zh: "看这个词：我一个音一个音拼，再连起来读。" },
+      ], function () {
+        if (!(S && S.q === Q && Q.dm === dm)) return;
+        slowSpell(q).then(function () { if (S && S.q === Q && Q.dm === dm) finish(); });
+      });
+    }
+  }
+  function demoNext() {
+    const Q = S.q, dm = Q.dm;
+    if (dm.i + 1 < dm.types.length) { dm.i++; loadDemo(); return; }
+    stopOwl();
+    if (dm.ret === "start") { Q.phase = "start"; render(); } else { Q.phase = "ask"; render(); }
+  }
+
   function autoQ() {
-    const q = S.q.list[S.q.qi];
+    const q = curQ();
     if (!q) return;
     if (q.type === "sound") Snd.tone(q.snd);
     else if (q.type === "word") Snd.say(q.text);
   }
+  function optInner(o, type) {
+    return type === "word"
+      ? '<span class="em">' + (o.emoji || "") + '</span><span class="w">' + esc(o.text) + "</span>"
+      : esc(o.text);
+  }
+  function optsHTML(q, cls, extra) {
+    return '<div class="opts n' + q.options.length + " " + cls + '">' + q.options.map(function (o, i) {
+      return '<button class="opt ' + q.type + (q.type === "sound" && o.text.length > 1 ? " long" : "") + extra(i) + '" data-act="' + (cls === "lock" ? "noop" : "q-pick") + '" data-i="' + i + '">' + optInner(o, q.type) + "</button>";
+    }).join("") + "</div>";
+  }
+  function parentHTML_quiz() {
+    return '<div class="qparent">' + (parentOpen
+      ? '<div class="ppanel"><b>第一次陪做</b><ol><li>坐在旁边，先让他自己试，别急着替他点。</li><li>他愣住了：点猫头鹰，它会再说一遍要做什么。</li><li>答错没关系，不扣分，只记第一次。</li></ol><button class="tell" data-act="q-tell">🦉 讲给我听</button></div>'
+      : "") +
+      '<button class="ppill" data-act="ptoggle">👨‍👩‍👦 ' + (parentOpen ? "收起" : "家长陪做") + "</button></div>";
+  }
   function quizHTML() {
     const Q = S.q;
     if (Q.phase === "result") return quizResultHTML();
-    const q = Q.list[Q.qi];
+    if (Q.phase === "start") {
+      return topbar() + '<div class="stage-body quizbody">' + owlRow(ZH.begin, "happy") +
+        '<button class="big-btn gobtn" data-act="q-begin" aria-label="开始">' + I.play + "</button>" +
+        '<button class="demobtn" data-act="q-demo-all">👀 看示范</button></div>' + parentHTML_quiz();
+    }
+    if (Q.phase === "demo") {
+      const dm = Q.dm, q = dm.q;
+      let mid = "";
+      if (q.type === "read") mid = '<div class="blocks" id="blocks">' + blocksHTML(q) + "</div>";
+      else mid = '<div class="mid"><button class="big-btn snd qsnd' + (dm.step === 1 ? " pulse" : "") + '" data-act="q-hear" aria-label="听">' + I.speaker + "</button></div>" +
+        optsHTML(q, "lock", function (i) { return dm.step >= 2 && i === q.answer ? " pointed" : ""; });
+      const more = dm.i + 1 < dm.types.length;
+      return topbar() + '<div class="stage-body quizbody"><span class="badge">👀 看我做</span>' + owlRow(dm.bubble || "我先做一次给你看") + mid +
+        (dm.done ? '<button class="big-btn gobtn wide" data-act="q-demo-next" aria-label="' + (more ? "下一个" : "我来试试") + '"><span class="gl">' + (more ? "下一个" : "我来试试") + "</span>" + I.play + "</button>" : "") + "</div>";
+    }
+    const q = curQ();
     let body = "";
     if (q.type === "read") {
-      if (Q.phase === "demo") {
-        body = '<div class="blocks" id="blocks">' + blocksHTML(q) + "</div>";
-      } else {
-        body = '<div class="wordpic">' + (q.alien ? "👽" : "") + '</div><div class="readword">' + esc(q.text) + "</div>" +
-          '<div class="pbar"><button data-act="q-right">读对 ✓</button><button data-act="q-wrong">读错</button></div>';
-      }
+      const bub = Q.phase === "spell" ? "我们一个音一个音来" : ZH.read;
+      body = owlRow(bub) + (Q.phase === "spell"
+        ? '<div class="blocks" id="blocks">' + blocksHTML(q) + "</div>"
+        : '<div class="wordpic">' + (q.alien ? "👽" : "") + '</div><div class="readword">' + esc(q.text) + "</div>" +
+          '<div class="pbar"><button data-act="q-right">读对 ✓</button><button data-act="q-wrong">读错</button></div>');
     } else {
-      body = '<button class="big-btn snd" data-act="q-hear" aria-label="再听一遍">' + I.speaker + "</button>" +
-        '<div class="opts n' + q.options.length + '">' + q.options.map(function (o, i) {
-          return '<button class="opt' + (Q.disabled && Q.disabled.indexOf(i) >= 0 ? " dim" : "") + '" data-act="q-pick" data-i="' + i + '">' + esc(o.text) + "</button>";
-        }).join("") + "</div>";
+      const heard = Q.heard;
+      const bub = Q.bubble || (heard ? ZH.listen : ZH.tapFirst);
+      const cls = heard ? (Q.locked ? "lock" : "") : "wait";
+      body = owlRow(bub, Q.locked && !Q.reveal ? "happy" : "") +
+        '<div class="mid"><button class="big-btn snd qsnd' + (heard ? "" : " fresh") + '" data-act="q-hear" aria-label="' + (heard ? "再听一遍" : "点我开始听") + '">' + I.speaker +
+        (heard ? "" : '<span class="gl">点我开始听</span>') + "</button></div>" +
+        optsHTML(q, cls, function (i) { return (Q.disabled.indexOf(i) >= 0 ? " dim" : "") + (Q.good === i ? " good" : ""); });
     }
-    return topbar() + '<div class="stage-body">' + body + miniDots(Q.list.length, Q.qi) + "</div>";
+    return topbar() + '<div class="stage-body quizbody">' + body + miniDots(Q.list.length, Q.qi) + "</div>";
   }
   function quizResultHTML() {
     const Q = S.q;
@@ -1065,39 +1133,68 @@
   }
   function nextQ() {
     const Q = S.q;
-    Q.qi++; Q.tries = 0; Q.locked = false; Q.disabled = []; Q.phase = "ask";
+    Q.qi++; Q.tries = 0; Q.locked = false; Q.disabled = []; Q.good = -1; Q.reveal = false; Q.bubble = ""; Q.phase = "ask";
     if (Q.qi >= Q.list.length) {
       Q.phase = "result";
       Quiz.addQuiz({ lesson: S.L.no, kind: Q.kind, stage: S.L.stage, score: Q.firstOk.filter(Boolean).length, total: Q.list.length, wrong: Q.wrongTags });
+      stopOwl();
       render(); Snd.ding();
       return;
     }
-    render(); autoQ();
+    enterQuestion();
+  }
+  // 说完这句再进下一题；换了题 / 离开小测就不进
+  function thenNext(Q, qi, gap) {
+    return function () { setTimeout(function () { if (S && S.q === Q && Q.qi === qi) nextQ(); }, gap); };
+  }
+  function qSteps(q) { return q.type === "sound" ? { snd: q.snd } : { en: q.text }; }
+  function qLabel(q) { return q.type === "sound" ? q.label : q.text; }
+  // 点喇叭 / 大蓝按钮：⭐ 第一次出声就发生在这次点击里（同步调用 speak / resume），不放进 setTimeout 或 await 后面
+  function hearQ() {
+    const Q = S.q;
+    if (Q.phase === "demo") { // 示范页上点喇叭：只重放要听的音 / 词
+      const dq = Q.dm.q;
+      stopOwl();
+      if (dq.type === "sound") Snd.tone(dq.snd); else Snd.say(dq.text);
+      return;
+    }
+    const q = curQ();
+    if (!Q.heard) {
+      Q.heard = true;
+      render();
+      owlSay([{ zh: ZH.listen, nodwell: true }, Object.assign({ b: "🔊 听……", on: pulseSnd }, qSteps(q))], function () { setBubble(esc(ZH.listen)); });
+      return;
+    }
+    stopOwl();
+    autoQ(); // 重听：随时、不限次数、不扣分
   }
   function pickOpt(el) {
-    const Q = S.q, q = Q.list[Q.qi];
-    if (Q.locked) return;
+    const Q = S.q, q = curQ();
+    if (Q.locked || !Q.heard) return;
     const i = +el.dataset.i;
+    const qi = Q.qi;
     if (i === q.answer) {
       if (Q.tries === 0) record(q, true);
-      Q.locked = true; cheer(el);
-      setTimeout(nextQ, 950);
+      Q.locked = true; Q.good = i; Q.bubble = "对啦！是 " + ph(qLabel(q));
+      render(); cheer($app.querySelectorAll(".opt")[i]);
+      owlSay([{ zh: "对啦！", b: Q.bubble }, qSteps(q)], thenNext(Q, qi, 500));
       return;
     }
     if (Q.tries === 0) record(q, false); // 第一次的结果才记
     Q.tries++;
-    Q.disabled = (Q.disabled || []).concat([i]);
-    if (Q.tries >= 2) { // 第二次还没选对：轻轻亮出正确答案，进入下一题
-      Q.locked = true;
+    Q.disabled = Q.disabled.concat([i]); // 选错的那个变灰，不出红叉
+    if (Q.tries >= 2) { // 再错：直接亮出答案，进入下一题
+      Q.locked = true; Q.good = q.answer; Q.reveal = true; Q.bubble = "没关系，是这个 👆 " + ph(qLabel(q));
       render();
-      const good = $app.querySelectorAll(".opt")[q.answer]; good && good.classList.add("good");
-      autoQ(); setTimeout(nextQ, 1500);
+      owlSay([{ zh: "没关系，答案是这个。", b: Q.bubble }, qSteps(q)], thenNext(Q, qi, 700));
       return;
     }
-    render(); autoQ(); // 播放正确答案，再来一次
+    Q.bubble = "再听一次，这次是 " + ph(qLabel(q));
+    render();
+    owlSay([{ zh: "再听一次，这次是", b: Q.bubble }, qSteps(q)], function () { /* 留在这一题，等孩子再选 */ });
   }
   async function readMark(ok) {
-    const Q = S.q, q = Q.list[Q.qi];
+    const Q = S.q, q = curQ();
     if (Q.locked) return;
     if (ok) {
       if (Q.tries === 0) record(q, true);
@@ -1108,7 +1205,7 @@
     if (Q.tries === 0) record(q, false);
     Q.tries++;
     if (Q.tries >= 2) { nextQ(); return; }
-    Q.locked = true; Q.phase = "demo"; render(); // 拆开一个音一个音读给他听，再读一次整词，然后再给一次机会
+    Q.locked = true; Q.phase = "spell"; render(); // 拆开一个音一个音读给他听，再读一次整词，然后再给一次机会
     await slowSpell(q);
     if (S && S.q === Q) { Q.locked = false; Q.phase = "ask"; render(); }
   }
@@ -1216,7 +1313,7 @@
     },
     home: function () {
       slowToken++;
-      Snd.stopAll();
+      stopOwl();
       S = null;
       mapStage = null;
       render();
@@ -1245,7 +1342,36 @@
     "flash-hear": function () {
       const c = S.deck[S.di];
       if (c.type === "unit") Snd.tone(c.u.snd);
-      else Snd.say(c.w);
+      else { sightTap(c.w); Snd.say(c.w); }
+    },
+    "sight-say": function (el) {
+      const w = el.dataset.w, was = sightCount(w), n = sightTap(w);
+      render();
+      if (n >= 3 && was < 3) owlSay([{ en: w }, { zh: "收集到啦！" }]);
+      else owlSay([{ en: w }]);
+    },
+    owl: function () {
+      const Q = S && S.q;
+      if (S && curStep() === "learn" && S.L.newSight.length) { owlSay([{ zh: sightWhy(S.L.newSight[0]) }]); return; }
+      if (!Q) return;
+      if (Q.phase === "start") owlSay([{ zh: ZH.begin }]);
+      else if (Q.phase === "demo") runDemo();
+      else if (Q.phase === "ask") owlSay([{ zh: curQ().type === "read" ? ZH.read : Q.heard ? ZH.listen : ZH.tapFirstSay }]);
+    },
+    "q-begin": quizBegin,
+    "q-demo-all": function () {
+      const types = [];
+      S.q.list.forEach(function (q) { if (types.indexOf(q.type) < 0) types.push(q.type); });
+      beginDemo(types, "start");
+    },
+    "q-demo-next": demoNext,
+    ptoggle: function () {
+      parentOpen = !parentOpen;
+      try { localStorage.setItem(PARENT_KEY, parentOpen ? "1" : "0"); } catch (e) { /* 记不住也照常用 */ }
+      render();
+    },
+    "q-tell": function () {
+      owlSay([{ zh: "你好，我是猫头鹰。小测里，我会先说怎么做，再放声音。孩子点一下蓝色大按钮就能听，想听几次都行。选对了我会夸他，选错了不扣分，我会再放一次。", b: "小测里我先说怎么做，再放声音；想听几次都行，选错不扣分。" }]);
     },
     "flash-next": function () {
       if (S.di + 1 < S.deck.length) {
@@ -1321,7 +1447,7 @@
     "test-tone": function () {
       Snd.tone("ae");
     },
-    "q-hear": function () { autoQ(); },
+    "q-hear": hearQ,
     "q-pick": pickOpt,
     "q-right": function () { readMark(true); },
     "q-wrong": function () { readMark(false); },

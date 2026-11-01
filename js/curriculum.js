@@ -979,8 +979,28 @@
     "love",
     "who",
   ];
-  // 第 1 批：从第 1 个「新音课」开始每课 1 个；第 2 批：从第 32 个新音课开始每课 1 个（约学期过半）
+  // 第 1 批：从第 4 个「新音课」开始每课最多 1 个（第 1~3 课一个常见词都不出现）；第 2 批：从第 32 个新音课开始每课 1 个（约学期过半）
+  const SIGHT1_START = 4;
   const SIGHT2_START = 31;
+  // 每个常见词里「不按规矩读」的那一段字母（页面只给这一段上色）；空串 = 没有可单挑的字母
+  // （a / I 只有一个字母，like 按规矩读，只是常见）
+  const SIGHT_IRR = {
+    the: "e", a: "", I: "", to: "o", you: "ou", he: "e", she: "e", we: "e", me: "e", be: "e",
+    was: "a", said: "ai", are: "a", they: "ey", my: "y", of: "f",
+    one: "o", two: "wo", come: "o", some: "o", do: "o", go: "o", no: "o", so: "o",
+    what: "a", where: "ere", there: "ere", here: "ere", have: "e", like: "", love: "o", who: "o",
+  };
+  // 把常见词切成 [{t:字母, irr:是否不按规矩读}]，给界面上色用
+  function sightParts(w) {
+    const irr = SIGHT_IRR[w] || "";
+    const i = irr ? w.indexOf(irr) : -1;
+    if (i < 0) return [{ t: w, irr: false }];
+    const out = [];
+    if (i > 0) out.push({ t: w.slice(0, i), irr: false });
+    out.push({ t: irr, irr: true });
+    if (i + irr.length < w.length) out.push({ t: w.slice(i + irr.length), irr: false });
+    return out;
+  }
 
   // ==== 拆音 ====
   function mapSound(sp) {
@@ -1036,7 +1056,8 @@
   C.forEach(function (c) {
     contentNo++;
     const newSight = [];
-    if (contentNo <= SIGHT1.length) newSight.push(SIGHT1[contentNo - 1]);
+    const i1 = contentNo - SIGHT1_START;
+    if (i1 >= 0 && i1 < SIGHT1.length) newSight.push(SIGHT1[i1]);
     const i2 = contentNo - SIGHT2_START;
     if (i2 >= 0 && i2 < SIGHT2.length) newSight.push(SIGHT2[i2]);
     const teams = c.teams;
@@ -1107,12 +1128,141 @@
     });
   });
 
+  // ==== 词 → emoji（拼读页配图；听词选词只用有图的词）====
+  const EMO = {
+    sun: "☀️",
+    apple: "🍎",
+    cat: "🐱",
+    pig: "🐷",
+    pen: "🖊️",
+    insect: "🐛",
+    net: "🥅",
+    nut: "🥜",
+    kid: "🧒",
+    egg: "🥚",
+    bed: "🛏️",
+    hat: "👒",
+    hen: "🐔",
+    red: "🟥",
+    run: "🏃",
+    mum: "👩",
+    map: "🗺️",
+    dog: "🐶",
+    dad: "👨",
+    goat: "🐐",
+    octopus: "🐙",
+    hot: "🥵",
+    umbrella: "☂️",
+    cup: "☕",
+    leg: "🦵",
+    lip: "👄",
+    fish: "🐟",
+    bus: "🚌",
+    van: "🚐",
+    web: "🕸️",
+    wet: "💧",
+    box: "📦",
+    fox: "🦊",
+    queen: "👑",
+    ship: "🚢",
+    shop: "🏪",
+    chip: "🍟",
+    ring: "💍",
+    king: "🤴",
+    bell: "🔔",
+    duck: "🦆",
+    sock: "🧦",
+    rain: "🌧️",
+    tree: "🌳",
+    boat: "⛵",
+    coat: "🧥",
+    moon: "🌙",
+    book: "📖",
+    car: "🚗",
+    star: "⭐",
+    fork: "🍴",
+    horse: "🐴",
+    bird: "🐦",
+    ear: "👂",
+    bear: "🐻",
+    pear: "🍐",
+    chair: "🪑",
+    coin: "🪙",
+    boy: "👦",
+    toy: "🧸",
+    house: "🏠",
+    cloud: "☁️",
+    cow: "🐄",
+    saw: "🪚",
+    paw: "🐾",
+    phone: "📱",
+    thumb: "👍",
+    lamb: "🐑",
+    dolphin: "🐬",
+    city: "🏙️",
+    ice: "🧊",
+    face: "😀",
+    gem: "💎",
+    snow: "❄️",
+    sea: "🌊",
+    tea: "🍵",
+    leaf: "🍃",
+    pie: "🥧",
+    fly: "🪰",
+    light: "💡",
+    blue: "🟦",
+    zoo: "🦁",
+    pool: "🏊",
+    spoon: "🥄",
+    flag: "🚩",
+    clock: "🕐",
+    drum: "🥁",
+    frog: "🐸",
+    crab: "🦀",
+    truck: "🚚",
+    swim: "🏊",
+    kite: "🪁",
+    bike: "🚲",
+    cake: "🎂",
+    game: "🎮",
+    home: "🏠",
+    bone: "🦴",
+    nose: "👃",
+    cute: "🥰",
+    jam: "🍓",
+    jet: "✈️",
+    bug: "🐞",
+    bat: "🦇",
+    bun: "🍞",
+    six: "6️⃣",
+    sing: "🎤",
+    pink: "🩷",
+    tent: "⛺",
+    nest: "🪺",
+    hand: "✋",
+    camp: "⛺",
+    lunch: "🍱",
+    hut: "🛖",
+    log: "🪵",
+    pot: "🍲",
+    table: "🪑",
+    apple2: "🍏",
+    plum: "🍑",
+    crown: "👑",
+    brush: "🪥",
+    sled: "🛷",
+    snap: "🫰",
+  };
+
   G.Curriculum = {
+    EMO: EMO,
     U: U,
     lessons: lessons,
     BASE: BASE,
     SIGHT1: SIGHT1,
     SIGHT2: SIGHT2,
+    SIGHT_IRR: SIGHT_IRR,
+    sightParts: sightParts,
     segment: segment,
     buildWord: buildWord,
   };
