@@ -1126,10 +1126,10 @@
     const qs = Quiz.records().quizzes.slice().reverse().slice(0, 30).map(function (q) {
       return "<tr><td>" + Quiz.dateStr(q.ts) + "</td><td>第 " + q.lesson + " 课</td><td>" + Quiz.KIND[q.kind] + "</td><td>" + q.score + " / " + q.total + "</td></tr>";
     }).join("");
-    const text = Quiz.summaryText(progress.cur);
+    const text = Quiz.summaryText(progress.cur, progress.done.length);
     return '<div class="parent-mask" data-act="parent-bg"><div class="parent" role="dialog" aria-label="掌握情况">' +
       '<h2>掌握情况<button data-act="parent-close" aria-label="关闭">' + I.close + "</button></h2>" +
-      "<p>已学完第 " + done + " 课 / 共 " + L.length + " 课。薄弱音：" + (weak.length ? weak.map(function (s) { return "<b>" + esc(Quiz.label(s.id)) + "</b>"; }).join("、") : "暂无") + "</p>" +
+      "<p>已学完 " + done + " 课 / 共 " + L.length + " 课。薄弱音：" + (weak.length ? weak.map(function (s) { return "<b>" + esc(Quiz.label(s.id)) + "</b>"; }).join("、") : "暂无") + "</p>" +
       '<p class="tiny">薄弱 = 答过至少 2 次且正确率低于 80%，或最近 4 次里错了 2 次以上。只统计每道题第一次作答。</p>' +
       '<div class="row"><button class="pbtn on" data-act="copy">复制给老师</button>' + (copyState === "ok" ? '<span class="tiny">已复制 ✓</span>' : "") + '<button class="pbtn" data-act="parent-back">返回</button></div>' +
       (copyState === "fail" ? '<p class="tiny">这台设备不让网页写剪贴板，请长按下面的文字全选后复制：</p><textarea id="copybox" readonly rows="10" style="width:100%;font-size:13px">' + esc(text) + "</textarea>" : "") +
@@ -1138,7 +1138,7 @@
       "</div></div>";
   }
   function copySummary() {
-    const text = Quiz.summaryText(progress.cur);
+    const text = Quiz.summaryText(progress.cur, progress.done.length);
     const fail = function () { copyState = "fail"; render(); const t = document.getElementById("copybox"); if (t) { t.focus(); t.select(); } };
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {

@@ -381,8 +381,9 @@
     });
     return ids.map(statOf);
   }
-  function summaryText(cur) {
-    const done = Math.max(0, cur - 1),
+  function summaryText(cur, doneCount) {
+    // doneCount = 首页地图用的「已学完课数」；不传时退回按当前课推算
+    const done = typeof doneCount === "number" ? doneCount : Math.max(0, cur - 1),
       now = LS[Math.min(cur, LS.length) - 1];
     const st = allStats(cur);
     const weak = st.filter(function (s) {
@@ -396,7 +397,7 @@
     const lines = [];
     lines.push("【拼读学习汇报】" + dateStr(Date.now()));
     lines.push(
-      "进度：已学完第 " +
+      "进度：已学完 " +
         done +
         " 课 / 共 " +
         LS.length +
