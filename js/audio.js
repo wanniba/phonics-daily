@@ -1,7 +1,7 @@
 /* audio.js —— 发声引擎
  * 负责：① 单音录音(audio/*.mp3)用 WebAudio 播放，可连播（拼接多个音）；② 单词用浏览器自带朗读(speechSynthesis)。
  * 不负责：界面、课程。
- * 约束：iOS 必须在「点击」里第一次触发声音 → unlock() 挂在第一次 pointerdown 上。
+ * 约束：iOS 必须在「点击（click / touchend）」里第一次触发声音 → unlock() 挂在 pointerdown + touchend + click 上；被挡时通过 setHandlers 通知界面显示「点我听」。
  */
 (function (G) {
   "use strict";
@@ -52,8 +52,24 @@
     }
     return buffers[id];
   }
-  function unlock() {
-    if (AC && !ctx) {
+  // iOS 的「静音拨片」会把 WebAudio 静掉；把音频会话声明成 playback 就不受影响（Safari 16.4+）
+  try {
+    if (G.navigator && G.navigator.audioSession) G.navigator.audioSession.type = "playback";
+  } catch (e) {
+    /* 老系统没有这个接口 */
+  }
+  // 被浏览器挡住（没有被点击解锁）时的回调：界面据此显示「点我听」
+  let onBlocked = null;
+  let onOk = null;
+  function blocked() {
+    if (onBlocked) onBlocked();
+  }
+  function ok() {
+    if (onOk) onOk();
+  }
+  // ev = 触发它的事件类型。iOS 只认 click / touchend 当「用户点击」，pointerdown / touchstart 不算
+  function unlock(ev) {
+    if (AC && (!ctx || ctx.state === "closed")) {
       try {
         ctx = new AC();
       } catch (e) {
@@ -62,22 +78,51 @@
     }
     if (ctx && ctx.state !== "running") {
       try {
-        ctx.resume();
+        const p = ctx.resume(); // 老 Safari 不返回 Promise
+        if (p && p.catch) p.catch(function () { /* 下次点击再试 */ });
       } catch (e) {
         /* 忽略 */
       }
     }
-    if (G.speechSynthesis && !unlock.spoke) {
-      // iOS：第一次朗读必须在点击里
+    const real = ev === "click" || ev === "touchend";
+    if (G.speechSynthesis && real && !unlock.spoke) {
+      // iOS：第一次朗读必须在真正的点击里；只在 click / touchend 里做一次
       unlock.spoke = true;
       try {
-        const u = new SpeechSynthesisUtterance(" ");
+        const u = new SpeechSynthesisUtterance(".");
         u.volume = 0;
         G.speechSynthesis.speak(u);
       } catch (e) {
         /* 忽略 */
       }
     }
+  }
+  // 确认 ctx 真的在跑；挂起就在这次调用里再 resume 一次，等 300ms，还不行就是被挡了
+  function ensureRunning() {
+    if (!ctx) return Promise.resolve(false);
+    if (ctx.state === "running") return Promise.resolve(true);
+    return new Promise(function (done) {
+      const t = setTimeout(function () {
+        done(ctx.state === "running");
+      }, 300);
+      try {
+        const p = ctx.resume();
+        if (p && p.then)
+          p.then(
+            function () {
+              clearTimeout(t);
+              done(ctx.state === "running");
+            },
+            function () {
+              clearTimeout(t);
+              done(false);
+            },
+          );
+      } catch (e) {
+        clearTimeout(t);
+        done(false);
+      }
+    });
   }
   function stopTones() {
     seqToken++;
@@ -95,10 +140,19 @@
     stopTones();
     const my = seqToken;
     const ids = [].concat(spec);
-    if (!ctx) return Promise.resolve();
-    return Promise.all(ids.map(load))
-      .then(function (bufs) {
+    if (!ctx) {
+      blocked(); // 还没有任何点击解锁过
+      return Promise.resolve();
+    }
+    return Promise.all([ensureRunning()].concat(ids.map(load)))
+      .then(function (res) {
         if (my !== seqToken) return;
+        if (!res[0]) {
+          blocked(); // 浏览器还没允许出声：别静默失败，让孩子点一下
+          return;
+        }
+        ok();
+        const bufs = res.slice(1);
         let t = ctx.currentTime + 0.02;
         bufs.forEach(function (b) {
           const src = ctx.createBufferSource();
@@ -202,8 +256,10 @@
       }
   }
   function say(text) {
+    const ss = G.speechSynthesis;
+    const busy = !!ss && (ss.speaking || ss.pending);
     stopSpeech();
-    if (!G.speechSynthesis) return Promise.resolve();
+    if (!ss) return Promise.resolve();
     return new Promise(function (done) {
       const u = new SpeechSynthesisUtterance(text);
       const v = pickVoice();
@@ -214,17 +270,34 @@
         u.lang = settings.accent === "gb" ? "en-GB" : "en-US";
       }
       u.rate = settings.rate;
+      let started = false;
       const t = setTimeout(done, 4000); // 防止个别浏览器不触发 end
+      const watch = setTimeout(function () {
+        if (!started && !ss.speaking) blocked(); // 2 秒还没开口：多半是没被点击解锁
+      }, 2000);
+      u.onstart = function () {
+        started = true;
+        clearTimeout(watch);
+        ok();
+      };
       u.onend = u.onerror = function () {
         clearTimeout(t);
+        clearTimeout(watch);
         done();
       };
-      try {
-        G.speechSynthesis.speak(u);
-      } catch (e) {
-        clearTimeout(t);
-        done();
+      function go() {
+        try {
+          if (ss.paused) ss.resume(); // Safari 偶尔卡在 paused，后面所有朗读都不出声
+          ss.speak(u);
+        } catch (e) {
+          clearTimeout(t);
+          clearTimeout(watch);
+          done();
+        }
       }
+      // WebKit：cancel() 之后立刻 speak()，这句会被一起吞掉；有东西在读时让出一拍
+      if (busy) setTimeout(go, 60);
+      else go();
     });
   }
   // 答对的小音效：两个上行的音（合成的，不用文件）
@@ -248,6 +321,10 @@
     settings: settings,
     saveSettings: saveSettings,
     unlock: unlock,
+    setHandlers: function (b, o) {
+      onBlocked = b;
+      onOk = o;
+    },
     tone: tone,
     say: say,
     ding: ding,

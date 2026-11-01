@@ -711,3 +711,12 @@ svg.i {
 .tile { min-width: 96px; padding: 10px 22px; border-radius: 24px; background: var(--card); box-shadow: 0 4px 0 var(--line); font-size: clamp(44px, 9vw, 72px); line-height: 1.15; }
 .tile.review { color: var(--snd); }
 .tile.sight { color: var(--pink); font-size: clamp(30px, 6vw, 46px); }
+
+/* 声音被浏览器挡住（没解锁 / 被静音）时：发声按钮脉动并带「点我听」，点一下就能出声 */
+@keyframes snd-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+.snd-blocked .big-btn.snd,
+.snd-blocked .flash,
+.snd-blocked .ubig { animation: snd-pulse 0.9s ease-in-out infinite; position: relative; outline: 4px solid #ff7a00; }
+.snd-blocked .big-btn.snd::after,
+.snd-blocked .flash::before,
+.snd-blocked .ubig::before { content: "👆 点我听"; position: absolute; left: 50%; top: -34px; transform: translateX(-50%); white-space: nowrap; font-size: 18px; font-weight: 700; color: #fff; background: #ff7a00; border-radius: 14px; padding: 4px 12px; }

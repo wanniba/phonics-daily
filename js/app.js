@@ -1349,15 +1349,15 @@
     },
   };
 
-  document.addEventListener(
-    "pointerdown",
-    function () {
-      Snd.unlock();
-    },
-    true,
+  ["pointerdown", "touchend", "click"].forEach(function (type) {
+    document.addEventListener(type, function () { Snd.unlock(type); }, true);
+  });
+  // 声音被浏览器挡住时：给所有发声按钮加醒目的「点我听」提示，点一下就是一次真点击，会重新放
+  Snd.setHandlers(
+    function () { document.body.classList.add("snd-blocked"); },
+    function () { document.body.classList.remove("snd-blocked"); },
   );
   $app.addEventListener("click", function (ev) {
-    Snd.unlock();
     const el = ev.target.closest("[data-act]");
     if (!el) return;
     if (el.dataset.act === "parent-bg" && ev.target !== el) return; // 只有点到遮罩本身才关
