@@ -8,19 +8,64 @@
     />
     <meta name="color-scheme" content="light" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="拼读" />
+    <!-- default = 状态栏深字、不压内容（black-translucent 白字会落在米色底上看不见）。theme-color 与 manifest 的颜色 = style.css :root 的 --bg（例外：meta 里引用不了 CSS 变量，改令牌要同步） -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="theme-color" content="#fff7e6" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <title>每天一课拼读</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232fbf71'/%3E%3Ctext x='32' y='46' font-size='40' font-family='Arial' font-weight='700' text-anchor='middle' fill='white'%3Eab%3C/text%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2317753f'/%3E%3Ctext x='32' y='46' font-size='40' font-family='Arial' font-weight='700' text-anchor='middle' fill='white'%3Eab%3C/text%3E%3C/svg%3E"
     />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <!-- 「今天做什么」卡片图标（同一文档内引用的 SVG 符号，不是外部资源） -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="t-read" viewBox="0 0 64 64"><path d="M8 14h18a6 6 0 0 1 6 6v32a5 5 0 0 0-5-5H8z"/><path d="M56 14H38a6 6 0 0 0-6 6v32a5 5 0 0 1 5-5h19z"/></symbol>
+      <symbol id="t-phon" viewBox="0 0 64 64"><rect x="6" y="12" width="38" height="38" rx="10"/><text x="25" y="40" text-anchor="middle" style="font:700 25px var(--font);fill:currentColor;stroke:none">Aa</text><path d="M49 24q5 7 0 14M55 17q11 14 0 28"/></symbol>
+      <symbol id="t-say" viewBox="0 0 64 64"><path d="M10 12h44a4 4 0 0 1 4 4v24a4 4 0 0 1-4 4H30l-12 10V44h-8a4 4 0 0 1-4-4V16a4 4 0 0 1 4-4z"/><path d="M22 28q10 9 20 0"/></symbol>
+      <symbol id="t-sayP" viewBox="0 0 64 64"><path d="M10 12h44a4 4 0 0 1 4 4v24a4 4 0 0 1-4 4H30l-12 10V44h-8a4 4 0 0 1-4-4V16a4 4 0 0 1 4-4z"/><path d="M16 38l9-10 7 7 5-5 9 8z"/><circle cx="44" cy="22" r="3"/></symbol>
+      <symbol id="t-write" viewBox="0 0 64 64"><path d="M12 52l3-12L40 15a4 4 0 0 1 6 0l3 3a4 4 0 0 1 0 6L24 49z"/><path d="M36 19l9 9"/><path d="M34 57h22"/></symbol>
+      <symbol id="t-writeS" viewBox="0 0 64 64"><path d="M12 52l3-12L40 15a4 4 0 0 1 6 0l3 3a4 4 0 0 1 0 6L24 49z"/><path d="M36 19l9 9"/><path d="M28 57h20M56 57h.1"/></symbol>
+      <symbol id="t-listen" viewBox="0 0 64 64"><path d="M10 40V32a22 22 0 0 1 44 0v8"/><rect x="8" y="38" width="12" height="18" rx="5"/><rect x="44" y="38" width="12" height="18" rx="5"/></symbol>
+      <symbol id="t-blocks" viewBox="0 0 64 64"><rect x="7" y="35" width="22" height="20" rx="5"/><rect x="35" y="35" width="22" height="20" rx="5"/><rect x="21" y="9" width="22" height="20" rx="5"/></symbol>
+      <symbol id="t-search" viewBox="0 0 64 64"><circle cx="27" cy="27" r="17"/><path d="M40 40l16 16"/><path d="M18 27h18"/></symbol>
+      <symbol id="t-bookstar" viewBox="0 0 64 64"><g transform="translate(5 12) scale(.84)"><path d="M8 14h18a6 6 0 0 1 6 6v32a5 5 0 0 0-5-5H8z"/><path d="M56 14H38a6 6 0 0 0-6 6v32a5 5 0 0 1 5-5h19z"/></g><path d="M32 3l2.5 5 5.5.8-4 3.9.9 5.5-4.9-2.6-4.9 2.6.9-5.5-4-3.9 5.5-.8z"/></symbol>
+      <symbol id="t-bookmark" viewBox="0 0 64 64"><path d="M16 6h32v52l-16-13-16 13z"/><path d="M26 20h12M26 29h8"/></symbol>
+      <symbol id="t-review" viewBox="0 0 64 64"><path d="M52 25A22 22 0 0 0 14 22M12 39a22 22 0 0 0 38 3"/><path d="M52 9v16H36M12 55V39h16"/></symbol>
+      <symbol id="t-bookheart" viewBox="0 0 64 64"><g transform="translate(5 12) scale(.84)"><path d="M8 14h18a6 6 0 0 1 6 6v32a5 5 0 0 0-5-5H8z"/><path d="M56 14H38a6 6 0 0 0-6 6v32a5 5 0 0 1 5-5h19z"/></g><path d="M32 18c-12-8-12-14-6-14 3 0 5 2 6 4 1-2 3-4 6-4 6 0 6 6-6 14z"/></symbol>
+      <symbol id="t-sun" viewBox="0 0 64 64"><circle cx="32" cy="32" r="11"/><path d="M32 6v8M32 50v8M6 32h8M50 32h8M13.6 13.6l5.7 5.7M44.7 44.7l5.7 5.7M13.6 50.4l5.7-5.7M44.7 19.3l5.7-5.7"/></symbol>
+      <symbol id="t-walker" viewBox="0 0 64 64"><circle cx="32" cy="22" r="13"/><path d="M26 20h.1M38 20h.1"/><path d="M26 27q6 5 12 0"/><path d="M14 60v-6a18 18 0 0 1 36 0v6"/></symbol>
+      <symbol id="t-play" viewBox="0 0 64 64"><path d="M20 12l32 20-32 20z"/></symbol>
+      <symbol id="t-check" viewBox="0 0 64 64"><path d="M12 34l14 14 26-30"/></symbol>
+      <symbol id="t-back" viewBox="0 0 64 64"><path d="M40 10L18 32l22 22"/></symbol>
+      <symbol id="t-trophy" viewBox="0 0 64 64"><path d="M20 8h24v18a12 12 0 0 1-24 0z"/><path d="M20 14H8v4a10 10 0 0 0 12 10M44 14h12v4a10 10 0 0 1-12 10"/><path d="M32 38v10M20 56h24M24 48h16v8H24z"/></symbol>
+      <symbol id="t-plus" viewBox="0 0 64 64"><path d="M32 12v40M12 32h40"/></symbol>
+      <symbol id="t-print" viewBox="0 0 64 64"><path d="M18 24V8h28v16"/><rect x="8" y="24" width="48" height="24" rx="6"/><rect x="18" y="38" width="28" height="18" rx="2"/></symbol>
+    </svg>
     <div id="app" aria-live="polite"></div>
     <script src="js/curriculum.js"></script>
     <script src="js/sources.js"></script>
     <script src="js/audio.js"></script>
 <script src="js/quiz.js"></script>
+    <script src="js/today.js"></script>
+    <script src="js/modules.js"></script>
     <script src="js/app.js"></script>
+    <script>
+      // 离线缓存：只在 http/https 注册；任何一步不可用（私密模式 / 老系统）页面照常工作
+      try {
+        if ("serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+          window.addEventListener("load", function () {
+            try {
+              navigator.serviceWorker.register("sw.js").catch(function () {});
+            } catch (e) {}
+          });
+        }
+      } catch (e) {}
+    </script>
   </body>
 </html>

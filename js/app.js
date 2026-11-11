@@ -1,12 +1,14 @@
 /* app.js —— 界面与流程
- * 负责：首页「今天第 N 课」、一课三步（复习闪卡 → 新音 → 拼读）、进度保存、家长面板（跳课 / 声音 / 说明 / 致谢）。
+ * 负责：首页「今天做什么」五张卡 + 「今天第 N 课」、抄写单、一课三步（复习闪卡 → 新音 → 拼读）、进度保存、家长面板（跳课 / 声音 / 说明 / 致谢）。
  * 不负责：课程内容（curriculum.js）、发声（audio.js）。
  * 块顺序：小工具 → 进度 → 图标/表情 → 首页 → 课程三步 → 家长面板 → 事件分发 → 启动
  */
 (function (G) {
   "use strict";
   const Cur = G.Curriculum,
-    Snd = G.Snd;
+    Snd = G.Snd,
+    Today = G.Today,
+    Mod = G.Modules;
   const L = Cur.lessons,
     U = Cur.U;
   const $app = document.getElementById("app");
@@ -269,9 +271,829 @@
   }
 
   // ==== 首页 ====
-  function stageColor(n) {
-    return "var(--s" + n + ")";
+
+  // ==== 今天做什么（五张大卡）：点卡即勾；拼读卡进课、学完自动勾；写卡打开抄写单 ====
+  const HOLD_MS = 3000;
+  const HOLD_RING =
+    '<svg class="ring" viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="24" r="21"/></svg>';
+  const DAYCAP = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+  let view = null; // null = 首页；'sheet' = 抄写单
+  let reward = false; // 全勾完的奖励
+  let rewardTimer = 0;
+  let hint = ""; // 短暂提示（短按齿轮）
+  let hintTimer = 0;
+
+  function flashHint(msg) {
+    hint = msg;
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(function () {
+      hint = "";
+      const tt = $app.querySelector(".toast");
+      if (tt) tt.remove();
+    }, 1800);
+    render();
   }
+  function nowD() {
+    return new Date();
+  }
+  function todayKey() {
+    return Today.ds(nowD());
+  }
+  function todayPlan() {
+    return Today.plan(Today.getMode(), Today.dowOf(nowD()));
+  }
+  function svgIc(id) {
+    return '<svg class="ic" viewBox="0 0 64 64" aria-hidden="true"><use href="#t-' + id + '"/></svg>';
+  }
+  // 抄写单用哪一课：当天记过课号就用它（学完后「继续」往后跳也不变），否则用现在的「继续」课
+  function sheetLesson() {
+    return Today.lessonOf(todayKey()) || Math.min(progress.cur, L.length);
+  }
+  function setTick(k, on) {
+    const date = todayKey(),
+      P = todayPlan();
+    const was = Today.allDone(date, P);
+    Today.set(date, k, on, sheetLesson());
+    if (on && !was && Today.allDone(date, P)) showReward();
+  }
+  function showReward() {
+    reward = true;
+    clearTimeout(rewardTimer);
+    rewardTimer = setTimeout(function () {
+      if (reward) {
+        reward = false;
+        render();
+      }
+    }, 6000);
+  }
+  // ctx = { date, kind: 'live'(今天，能勾) | 'past'(过去，只读) | 'fut'(未来，只预览) }
+  function cardHTML(x, ctx) {
+    const date = ctx.date,
+      done = Today.isDone(date, x.k);
+    if (ctx.kind !== "live") {
+      return (
+        '<button class="tcard ro ' + (done ? "done" : ctx.kind === "fut" ? "fut" : "miss") + '" data-act="t-ro" data-kind="' + ctx.kind +
+        '" style="--ac:var(' + x.ac + ')" aria-disabled="true" aria-label="' + esc(x.cap) + (done ? "，已完成" : "") + '">' +
+        svgIc(x.ic) + '<span class="cap">' + esc(x.cap) + "</span>" + '<span class="tbadge">' + svgIc("check") + "</span>" +
+        (Today.isMakeup(date, x.k) ? '<i class="bu">补</i>' : "") + "</button>"
+      );
+    }
+    const act = x.k === "phon" ? "t-phon" : x.k === "write" ? "t-write" : "t-card";
+    // 拼读卡：孩子在清单上不能取消（只有学完一课才勾）；写卡：进抄写单里勾
+    return (
+      '<button class="tcard' + (done ? " done" : "") + '" data-act="' + act + '" data-k="' + x.k +
+      '" style="--ac:var(' + x.ac + ')" aria-pressed="' + done + '" aria-label="' + esc(x.cap) + (done ? "，已完成" : "") + '">' +
+      svgIc(x.ic) + '<span class="cap">' + esc(x.cap) + "</span>" +
+      '<span class="tbadge">' + svgIc("check") + "</span></button>"
+    );
+  }
+  // ==== 首页两个视图：「今天」（默认）与「全部课程」；只在同一天内记住停在哪一页 ====
+  const HV_KEY = "phonics.homeview.v1";
+  // 三个视图：'today' 今天 / 'stage' 某一阶段的课（mapStage = 1..9）/ 'all' 全部课程（9 阶段总图）
+  function loadHomeView() {
+    try {
+      const o = JSON.parse(localStorage.getItem(HV_KEY) || "null");
+      if (o && o.d === todayKey()) {
+        if (o.v === "all") return { v: "all", s: null };
+        if (o.v === "stage" && o.s >= 1 && o.s <= 9) return { v: "stage", s: Math.round(o.s) };
+      }
+    } catch (e) { /* 读不到就回到「今天」 */ }
+    return { v: "today", s: null };
+  }
+  const hv0 = loadHomeView();
+  let homeView = hv0.v;
+  let mapStage = hv0.s; // 只在 homeView === 'stage' 时有值
+  let nav = ""; // 下一次渲染的换页动画：'in' 放大进「今天」/ 'out' 缩小进别的视图
+  let scrollCur = homeView === "stage"; // 进阶段课视图 / 刷新后：把今天这课滚到可见
+  // 点线带上选中的那一天（null = 今天）。只在「今天」视图里管主区显示哪一天；刷新后回到今天
+  let selDay = null;
+  let bandLeft = null; // 点线带的横向滚动位置：重画页面时保留；null = 还没滚过，打开时居中今天
+  function curDay() {
+    return selDay || todayKey();
+  }
+  function setHomeView(v, st) {
+    homeView = v;
+    mapStage = v === "stage" ? st : null;
+    try { localStorage.setItem(HV_KEY, JSON.stringify({ v: v, s: mapStage, d: todayKey() })); } catch (e) { /* 存不了也照常用 */ }
+  }
+  // 今天这课：今天已学完的就是那一课，否则是「继续」指向的课（与拼读卡点进去的是同一课）
+  function todayLessonNo() {
+    const done = Today.isDone(todayKey(), "phon") ? Today.lessonOf(todayKey()) : 0;
+    return done || Math.min(progress.cur, L.length);
+  }
+  function lessonTilesHTML(l) {
+    let tiles = "";
+    if (l.kind === "review") {
+      tiles += '<span class="tile review">' + I.cards + "</span>";
+      l.weekUnits.slice(0, 5).forEach(function (u) {
+        tiles += '<span class="tile review">' + esc(U[u].g) + "</span>";
+      });
+    } else {
+      (l.units.length ? l.units : l.focus).forEach(function (u) {
+        tiles += '<span class="tile' + (l.units.length ? "" : " review") + '">' + esc(U[u].g) + "</span>";
+      });
+    }
+    l.newSight.forEach(function (w) {
+      tiles += '<span class="tile sight">' + sightHTML(w) + "</span>";
+    });
+    return tiles;
+  }
+// 今天（或过去 / 未来某天）这课的估计：从今天往后数「清单里有拼读」的日子，一天一课（只用来预览）
+function futureLessonNo(date) {
+  const ts = todayKey(),
+    todayDone = Today.isDone(ts, "phon");
+  let cnt = 0;
+  for (
+    let d = Today.parse(ts), end = Today.parse(date);
+    d <= end;
+    d = Today.addDays(d, 1)
+  ) {
+    if (Today.ds(d) === ts && todayDone) continue;
+    if (
+      Today.plan(Today.getMode(), Today.dowOf(d)).some(function (x) {
+        return x.k === "phon";
+      })
+    )
+      cnt++;
+  }
+  return cnt ? Math.min(L.length, progress.cur + cnt - 1) : 0;
+}
+// 拼读 + 这天那一课合成的大卡：今天可点进课（学完自动勾，孩子在清单上不能取消）；过去 / 未来只看
+function heroHTML(ctx) {
+  const date = ctx.date,
+    live = ctx.kind === "live",
+    done = Today.isDone(date, "phon");
+  if (live && finished() && !done) {
+    return '<button class="thero trophy" data-act="replay-all" aria-label="再来一遍">🎉🏆🎉</button>';
+  }
+  const no = live
+    ? todayLessonNo()
+    : done
+      ? Today.lessonOf(date)
+      : ctx.kind === "fut"
+        ? futureLessonNo(date)
+        : 0;
+  const l = no ? L[no - 1] : null;
+  const words = l
+    ? l.words
+        .slice(0, 3)
+        .map(function (w) {
+          return "<span>" + esc(w.text) + "</span>";
+        })
+        .join("")
+    : "";
+  const attrs = live
+    ? 'data-act="t-phon" data-k="phon"'
+    : 'data-act="t-ro" data-kind="' + ctx.kind + '" aria-disabled="true"';
+  const cls =
+    "thero" +
+    (done ? " done" : "") +
+    (live ? "" : " ro " + (done ? "" : ctx.kind === "fut" ? "fut" : "miss"));
+  return (
+    '<button class="' +
+    cls +
+    '" ' +
+    attrs +
+    ' aria-pressed="' +
+    done +
+    '" aria-label="拼读' +
+    (l ? "，第 " + l.no + " 课" : "") +
+    (done ? "，已完成" : "") +
+    '">' +
+    '<span class="hl">' +
+    svgIc("phon") +
+    (l ? '<b class="no">' + l.no + "</b>" : "") +
+    "</span>" +
+    '<span class="hm"><span class="tiles">' +
+    (l ? lessonTilesHTML(l) : '<span class="tile">拼读</span>') +
+    '</span><span class="words">' +
+    words +
+    "</span></span>" +
+    (live || done
+      ? '<span class="hr">' + svgIc(done ? "check" : "play") + "</span>"
+      : "") +
+    (Today.isMakeup(date, "phon") ? '<i class="bu">补</i>' : "") +
+    "</button>"
+  );
+}
+function cardsRow(items, ctx) {
+  const smalls = items.filter(function (x) {
+    return x.k !== "phon";
+  });
+  if (!smalls.length) return "";
+  return (
+    '<div class="tcards' +
+    (smalls.length === 1 ? " one" : "") +
+    '" style="--n:' +
+    Math.min(4, smalls.length) +
+    '">' +
+    smalls
+      .map(function (x) {
+        return cardHTML(x, ctx);
+      })
+      .join("") +
+    "</div>"
+  );
+}
+function groupHTML(items, ctx) {
+  return (
+    (items.some(function (x) {
+      return x.k === "phon";
+    })
+      ? heroHTML(ctx)
+      : "") + cardsRow(items, ctx)
+  );
+}
+function gearHTML() {
+  return (
+    '<button class="round small hold" data-hold="parent" aria-label="家长设置：按住 3 秒打开（键盘：按住 Enter）">' +
+    I.gear +
+    HOLD_RING +
+    "</button>"
+  );
+}
+// 左上「今天药丸」：周几；不在「今天」时它是回今天的大按钮，带今天各项的完成小图标，吸顶固定
+function pillHTML(asButton) {
+  const inner =
+    svgIc("sun") +
+    "<span>" +
+    DAYCAP[Today.dowOf(nowD())] +
+    "</span>" +
+    (asButton
+      ? '<span class="mini" aria-hidden="true">' +
+        todayPlan()
+          .map(function (x) {
+            return (
+              '<i class="' +
+              (Today.isDone(todayKey(), x.k) ? "on" : "") +
+              '" style="--ac:var(' +
+              x.ac +
+              ')">' +
+              svgIc(x.ic) +
+              "</i>"
+            );
+          })
+          .join("") +
+        "</span>"
+      : "");
+  return asButton
+    ? '<button class="pill" data-act="go-today" aria-label="回到今天">' +
+        inner +
+        "</button>"
+    : '<span class="pill">' + inner + "</span>";
+}
+
+// ==== 顶部：按天的点线进度带（7 天一组，周一～周日；每组后面一个组标）====
+const WD = ["", "一", "二", "三", "四", "五", "六", "日"];
+// 完成统一一个深绿（不按周换色）；周与周只靠奖杯点分隔
+function dayState(info) {
+  return info.fut ? "fut" : info.full ? "full" : info.c ? "part" : "miss";
+}
+// 一天的圆点：只靠样式区分状态（实心深绿对勾 / 一圈绿弧 / 实心米色盘 / 虚线框 / 小人 + 虚线圈），不写 x/5
+function dayDotHTML(info) {
+  const state = dayState(info);
+  const cls =
+    "dn " + state + (info.today ? " today" : "") + (info.date === curDay() ? " sel" : "");
+  const label =
+    info.mon + "月" + info.dom + "日 周" + WD[info.dow] +
+    (info.today ? "，今天" : "") +
+    (info.fut ? "，还没到" : "，完成 " + info.c + " / " + info.t) +
+    (info.bu ? "，有补的" : "");
+  return (
+    '<button class="' + cls + '"' + (state === "part" ? ' style="--p:' + Math.round((info.c / info.t) * 100) + '"' : "") +
+    ' data-act="day" data-d="' + info.date +
+    '" aria-label="' + label + '" aria-pressed="' + (info.date === curDay()) + '">' +
+    (info.today
+      ? '<span class="me" aria-hidden="true">' + svgIc("walker") + "</span>"
+      : state === "full" ? svgIc("check") : "<b>" + info.dom + "</b>") +
+    (info.bu ? '<i class="bu">补</i>' : "") +
+    "</button>"
+  );
+}
+// 组标：每周日后面的奖杯点，7 天全做完 = 金色，否则灰色
+function weekMarkHTML(wk) {
+  const gold = wk.fullN === 7;
+  return (
+    '<span class="dm' + (gold ? " full" : "") + '" role="img" aria-label="这一周' +
+    (gold ? "7 天全做完" : "做完了 " + wk.fullN + " 天，共 7 天") + '">' + svgIc("trophy") + "</span>"
+  );
+}
+function dayBandHTML() {
+  const weeks = Today.span(nowD());
+  // 摊平成一条线上的点：7 天 + 1 个组标，循环
+  const items = [];
+  weeks.forEach(function (wk) {
+    wk.days.forEach(function (d) {
+      items.push({ html: dayDotHTML(d), on: d.full, fut: d.fut });
+    });
+    items.push({ html: weekMarkHTML(wk), on: wk.fullN === 7, fut: wk.days[6].fut, mark: true });
+  });
+  // 两点之间的连线：前一个点「完成」且后一个点已到 = 绿色，其余米色
+  const seg = function (a, b) {
+    return a.on && !b.fut;
+  };
+  return (
+    '<div class="dband" role="group" aria-label="每一天的完成情况，可左右滑动">' +
+    items
+      .map(function (it, i) {
+        const L = i > 0 && seg(items[i - 1], it),
+          R = i < items.length - 1 && seg(it, items[i + 1]);
+        return (
+          '<div class="dcw' + (it.mark ? " tw" : "") + (i > 0 ? " hl" : "") + (i < items.length - 1 ? " hr" : "") +
+          (L ? " gl" : "") + (R ? " gr" : "") + '">' + it.html + "</div>"
+        );
+      })
+      .join("") +
+    "</div>"
+  );
+}
+
+// ==== 左侧模块栏（横屏在左；竖屏 / 手机折成点线带下方一行可横滑的卡）====
+function weekCount(k) {
+  return Today.itemWeeks(k, 1, nowD())[0].filter(function (c) {
+    return c.on;
+  }).length;
+}
+function moduleCardHTML(m) {
+  return (
+    '<button class="mcard ' +
+    (m.cls || "") +
+    (m.sel ? " sel" : "") +
+    '" data-act="mod" data-m="' +
+    m.id +
+    '" style="--ac:var(' +
+    m.ac +
+    ')" aria-label="' +
+    esc(m.aria) +
+    '" aria-pressed="' +
+    !!m.sel +
+    '">' +
+    svgIc(m.ic) +
+    '<span class="mt"><b class="mn">' +
+    m.n +
+    (m.of ? "<i>/ " + m.of + "</i>" : "") +
+    '</b><span class="ms">' +
+    esc(m.sub) +
+    "</span></span>" +
+    (m.bar != null
+      ? '<span class="mbar"><i style="width:' +
+        Math.min(100, Math.round(m.bar)) +
+        '%"></i></span>'
+      : "") +
+    (m.chips || "") +
+    "</button>"
+  );
+}
+function sideHTML() {
+  const rv = Mod.review(progress.cur);
+  const sel =
+    homeView === "today"
+      ? ""
+      : homeView === "stage" || homeView === "all"
+        ? "phon"
+        : homeView;
+  const ts = todayKey();
+  const cards = [
+    {
+      id: "review",
+      cls: "rv" + (rv.length ? "" : " zero"),
+      ic: rv.length ? "review" : "check",
+      ac: "--rv",
+      n: rv.length,
+      sub: rv.length ? "要再练" : "都会啦",
+      aria: "要再练，" + (rv.length ? rv.length + " 个" : "没有"),
+      // 最多露 2 个词，多的用「+N」告诉你还有（手机上也留着）
+      chips: rv.length
+        ? '<span class="mchips">' +
+          rv
+            .slice(0, 2)
+            .map(function (x) {
+              return "<i>" + esc(x.label) + "</i>";
+            })
+            .join("") +
+          (rv.length > 2 ? '<i class="more" aria-hidden="true">+' + (rv.length - 2) + "</i>" : "") +
+          "</span>"
+        : "",
+    },
+    {
+      id: "phon",
+      ic: "phon",
+      ac: "--c-phon",
+      n: progress.done.length,
+      of: L.length,
+      sub: "拼读 · 阶段 " + L[todayLessonNo() - 1].stage,
+      bar: (progress.done.length / L.length) * 100,
+      aria: "自然拼读，已学 " + progress.done.length + " / " + L.length,
+    },
+    {
+      id: "read",
+      ic: "read",
+      ac: "--c-read",
+      n: Mod.monthCount(ts),
+      of: Mod.goal("read"),
+      sub: "阅读 · 本月",
+      aria: "阅读，本月读了 " + Mod.monthCount(ts) + " 本",
+    },
+  ];
+  return (
+    cards
+      .map(function (m) {
+        m.sel = sel === m.id;
+        if (m.bar == null && m.of) m.bar = (m.n / m.of) * 100;
+        return moduleCardHTML(m);
+      })
+      .join("") + weekCardHTML(sel)
+  );
+}
+// 听 / 说 / 写合成一张「本周」卡：一行一个，一条进度条 + 几 / 目标，整行可点
+function weekCardHTML(sel) {
+  const rows = [
+    { id: "listen", ic: "listen", ac: "--c-listen", sub: "听力" },
+    { id: "say", ic: "say", ac: "--c-say", sub: "说" },
+    { id: "write", ic: "write", ac: "--c-write", sub: "写" },
+  ];
+  return (
+    '<div class="wcard" role="group" aria-label="本周的听力、说、写"><span>本周</span>' +
+    rows
+      .map(function (r) {
+        const n = weekCount(r.id),
+          g = Mod.goal(r.id);
+        return (
+          '<button class="wr' + (sel === r.id ? " sel" : "") + '" data-act="mod" data-m="' + r.id +
+          '" style="--ac:var(' + r.ac + ')" aria-label="' + r.sub + "，本周 " + n + " / " + g +
+          ' 天" aria-pressed="' + (sel === r.id) + '">' +
+          svgIc(r.ic) +
+          '<span class="mbar"><i style="width:' + Math.min(100, Math.round((n / g) * 100)) + '%"></i></span>' +
+          "<b>" + n + "<i>/" + g + "</i></b></button>"
+        );
+      })
+      .join("") +
+    "</div>"
+  );
+}
+
+// ==== 主区：选中那一天的任务 ====
+function addBookBarHTML() {
+  const ts = todayKey();
+  if (!(Today.isDone(ts, "read") || Today.isDone(ts, "bookstar"))) return "";
+  return (
+    '<div class="addbk">' +
+    svgIc("read") +
+    "<span>本月 <b>" +
+    Mod.monthCount(ts) +
+    "</b> 本</span>" +
+    '<button class="abtn" data-act="bk-add" aria-label="读完一本书，记一本">' +
+    svgIc("plus") +
+    "1 本</button></div>"
+  );
+}
+function dayMainHTML(date) {
+  const ts = todayKey();
+  const kind = date === ts ? "live" : date < ts ? "past" : "fut";
+  const ctx = { date: date, kind: kind };
+  const info = Today.day(date, ts);
+  const P = info.P;
+  let body;
+  if (
+    P.some(function (x) {
+      return x.g;
+    })
+  ) {
+    body = [1, 2]
+      .map(function (g) {
+        return (
+          '<div class="tband"><span class="tnum">' +
+          g +
+          '</span><div class="gcol">' +
+          groupHTML(
+            P.filter(function (x) {
+              return x.g === g;
+            }),
+            ctx,
+          ) +
+          "</div></div>"
+        );
+      })
+      .join("");
+  } else {
+    body = groupHTML(P, ctx);
+  }
+  const head =
+    kind === "live"
+      ? ""
+      : '<div class="dayhead ' +
+        kind +
+        '"><b>' +
+        info.mon +
+        "月" +
+        info.dom +
+        "日 周" +
+        WD[info.dow] +
+        "</b><span>" +
+        (kind === "past" ? "过去的一天 · 只能看" : "还没到 · 先看看") +
+        "</span></div>";
+  return (
+    '<div class="tp">' +
+    head +
+    body +
+    (kind === "live" ? addBookBarHTML() : "") +
+    "</div>"
+  );
+}
+
+// ==== 主区：各模块视图 ====
+function mheadHTML(ic, ac, title, sub) {
+  return (
+    '<div class="mhead" style="--ac:var(' +
+    ac +
+    ')">' +
+    svgIc(ic) +
+    "<b>" +
+    esc(title) +
+    "</b><span>" +
+    esc(sub) +
+    "</span></div>"
+  );
+}
+function reviewViewHTML() {
+  const items = Mod.review(progress.cur);
+  if (!items.length) {
+    return (
+      '<div class="mview">' +
+      mheadHTML("review", "--done", "要再练", "现在没有") +
+      '<div class="mempty">' +
+      svgIc("check") +
+      "<b>都会啦！</b></div></div>"
+    );
+  }
+  return (
+    '<div class="mview">' +
+    mheadHTML("review", "--rv", "要再练", items.length + " 个，点一个去练") +
+    '<div class="rgrid">' +
+    items
+      .map(function (it) {
+        return (
+          '<button class="rtile" data-act="rv-go" data-n="' +
+          it.lesson +
+          '"' +
+          (it.lesson ? "" : " disabled") +
+          ">" +
+          '<span class="rg">' +
+          esc(it.label) +
+          '</span><span class="rl">' +
+          (it.lesson ? "第 " + it.lesson + " 课" : "") +
+          "</span></button>"
+        );
+      })
+      .join("") +
+    "</div></div>"
+  );
+}
+function booksViewHTML() {
+  const ts = todayKey(),
+    n = Mod.monthCount(ts),
+    g = Mod.goal("read"),
+    list = Mod.bookList();
+  return (
+    '<div class="mview">' +
+    mheadHTML("read", "--c-read", "阅读", "本月 " + n + " / " + g + " 本") +
+    '<div class="gbar"><i style="width:' +
+    Math.min(100, Math.round((n / g) * 100)) +
+    '%"></i></div>' +
+    (list.length
+      ? '<div class="bklist">' +
+        list
+          .map(function (b, idx) {
+            return (
+              '<div class="bk">' +
+              svgIc("read") +
+              "<b>" +
+              (b.t ? esc(b.t) : "第 " + (list.length - idx) + " 本") +
+              "</b><span>" +
+              Number(b.d.slice(5, 7)) +
+              "/" +
+              Number(b.d.slice(8, 10)) +
+              "</span></div>"
+            );
+          })
+          .join("") +
+        "</div>"
+      : '<div class="mempty">' +
+        svgIc("read") +
+        "<b>读完一本，在「读书」卡上点＋1 本</b></div>") +
+    "</div>"
+  );
+}
+function weekViewHTML(k) {
+  const meta = {
+    listen: ["listen", "--c-listen", "听力"],
+    say: ["say", "--c-say", "说"],
+    write: ["write", "--c-write", "写"],
+  }[k];
+  const rows = Today.itemWeeks(k, 4, nowD()).reverse();
+  const n = rows[0].filter(function (c) {
+    return c.on;
+  }).length;
+  const names = ["本周", "上周", "前 2 周", "前 3 周"];
+  return (
+    '<div class="mview">' +
+    mheadHTML(
+      meta[0],
+      meta[1],
+      meta[2],
+      "本周 " +
+        n +
+        " / " +
+        Mod.goal(k) +
+        " 天" +
+        (k === "listen" ? " · " + n * 15 + " 分钟" : ""),
+    ) +
+    '<div class="gbar"><i style="width:' +
+    Math.min(100, Math.round((n / Mod.goal(k)) * 100)) +
+    '%"></i></div>' +
+    rows
+      .map(function (r, i) {
+        return (
+          '<div class="wrow"><span class="wn">' +
+          names[i] +
+          "</span>" +
+          r
+            .map(function (c) {
+              return (
+                '<i class="wd' +
+                (c.on ? " on" : "") +
+                (c.fut ? " fut" : "") +
+                (c.today ? " today" : "") +
+                '" aria-label="周' +
+                WD[c.dow] +
+                (c.on ? "，做了" : "") +
+                '">' +
+                (c.on ? svgIc("check") : WD[c.dow]) +
+                "</i>"
+              );
+            })
+            .join("") +
+          "</div>"
+        );
+      })
+      .join("") +
+    "</div>"
+  );
+}
+function stageMainHTML() {
+  const n = mapStage,
+    s = stageInfo(n);
+  return (
+    '<div class="sh2"><span class="stitle"><span class="snum">' +
+    n +
+    "</span>" +
+    esc(STAGE_NAME[n]) +
+    "<b>" +
+    s.done +
+    "/" +
+    s.total +
+    "</b></span>" +
+    flagHTML(stageTest(n)) +
+    '<button class="back9" data-act="go-all" aria-label="看 9 个阶段总图">' +
+    I.next +
+    "</button></div>" +
+    '<div class="lgrid">' +
+    s.ls.map(lessonSquareHTML).join("") +
+    "</div>"
+  );
+}
+function allMainHTML() {
+  const doneN = progress.done.length;
+  const pctN = Math.round((doneN / L.length) * 100);
+  let cards = "";
+  for (let n = 1; n <= 9; n++) cards += stageCardHTML(n);
+  return (
+    '<div class="sh2"><div class="total" aria-label="总进度 ' +
+    doneN +
+    " / " +
+    L.length +
+    '"><b>' +
+    doneN +
+    "</b><span>/ " +
+    L.length +
+    '</span><span class="tbar"><i style="width:' +
+    pctN +
+    '%"></i></span><em>' +
+    pctN +
+    "%</em></div></div>" +
+    '<div class="smap">' +
+    cards +
+    "</div>"
+  );
+}
+function mainHTML() {
+  if (homeView === "today") return dayMainHTML(curDay());
+  if (homeView === "stage" && mapStage) return stageMainHTML();
+  if (homeView === "review") return reviewViewHTML();
+  if (homeView === "read") return booksViewHTML();
+  if (homeView === "listen" || homeView === "say" || homeView === "write")
+    return weekViewHTML(homeView);
+  return allMainHTML();
+}
+// 首页外壳：顶条（今天药丸 + 预留格 + 齿轮）→ 点线带 → 左侧模块栏 + 主区
+function homeHTML() {
+  const away = homeView !== "today" || curDay() !== todayKey();
+  return (
+    '<div class="top home stick">' +
+    pillHTML(away) +
+    '<span class="tslot"></span>' +
+    gearHTML() +
+    "</div>" +
+    dayBandHTML() +
+    '<div class="hshell"><nav class="side" aria-label="模块">' +
+    sideHTML() +
+    '</nav><section class="hmain">' +
+    mainHTML() +
+    "</section></div>"
+  );
+}
+  function sheetRow(word, mode) {
+    // 四线三格：mode = model 示范 + 描红；blank 空行
+    let o = '<svg class="row" viewBox="0 0 900 104" role="img" aria-label="书写格线">';
+    [14, 44, 74, 104].forEach(function (y, i) {
+      o += '<line class="ln ' + (i === 0 ? "top" : i === 1 ? "mid" : i === 3 ? "bot" : "") +
+        '" x1="0" y1="' + y + '" x2="900" y2="' + y + '"/>';
+    });
+    if (mode === "model") {
+      const slot = Math.max(190, word.length * 38 + 70);
+      o += '<text class="md" x="8" y="74">' + esc(word) + "</text>";
+      for (let i = 1; i <= 2; i++)
+        if (8 + slot * i + word.length * 36 < 900)
+          o += '<text class="tr" x="' + (8 + slot * i) + '" y="74">' + esc(word) + "</text>";
+    }
+    return o + "</svg>";
+  }
+  function sentenceRow() {
+    let o = '<svg class="row" viewBox="0 0 900 104" role="img" aria-label="句子格线">';
+    [14, 44, 74, 104].forEach(function (y, i) {
+      o += '<line class="ln ' + (i === 0 ? "top" : i === 1 ? "mid" : i === 3 ? "bot" : "") +
+        '" x1="0" y1="' + y + '" x2="900" y2="' + y + '"/>';
+    });
+    return o + '<text class="md" x="8" y="74">I like</text><line class="blank" x1="230" y1="74" x2="800" y2="74"/><circle class="dot" cx="822" cy="72" r="4"/></svg>';
+  }
+  function writeIsSentence() {
+    const w = todayPlan().filter(function (x) { return x.k === "write"; })[0];
+    return !!(w && w.sentence);
+  }
+  function sheetHTML() {
+    const sentence = writeIsSentence(),
+      n = sheetLesson(),
+      d = nowD();
+    let rows = "";
+    if (sentence) rows = sentenceRow() + sheetRow("", "blank") + sheetRow("", "blank") + sheetRow("", "blank");
+    else
+      Today.pickWords(n).words.forEach(function (w) {
+        rows += sheetRow(w, "model") + sheetRow(w, "blank");
+      });
+    const on = Today.isDone(todayKey(), "write");
+    return (
+      '<div class="sheetscr"><div class="shbar"><button class="round" data-act="t-sheet-back" aria-label="返回">' + svgIc("back") +
+      '</button><span class="sttl">' + svgIc(sentence ? "writeS" : "write") + '</span><button class="round" data-act="t-print" aria-label="打印">' +
+      svgIc("print") + '</button></div><div class="paper"><div class="ph"><b>' + (sentence ? "写一句话" : "抄写") + "</b><span>" +
+      (d.getMonth() + 1) + "/" + d.getDate() + " · 第 " + n + " 课</span></div>" + rows + '</div><div class="sfoot">' +
+      '<button class="tdone' + (on ? " on" : "") + '" data-act="t-sheet-done" aria-pressed="' + on + '" aria-label="写完了">' + svgIc("check") + "</button></div></div>"
+    );
+  }
+  function rewardHTML() {
+    let cf = "";
+    const cols = ["--rv", "--gold", "--c-phon", "--done-line", "--c-write", "--c-say", "--c-read"];
+    for (let i = 0; i < 16; i++)
+      cf += '<i style="left:' + (i * 6.2 + 2) + "%;background:var(" + cols[i % 7] + ");animation-delay:" + ((i % 5) * 0.15) + 's"></i>';
+    return (
+      '<div class="reward" data-act="t-reward-close" role="status" aria-label="今天都做完啦"><div class="conf" aria-hidden="true">' + cf +
+      '</div><span class="rok">' + svgIc("check") + '</span><span class="rstars" aria-hidden="true">⭐️🎉⭐️</span></div>'
+    );
+  }
+  function todayParentHTML() {
+    const m = Today.getMode();
+    const seg = function (v, label) {
+      return '<button class="seg' + (m === v ? " on" : "") + '" data-act="t-mode" data-v="' + v + '" aria-pressed="' + (m === v) + '">' +
+        (m === v ? "● " : "") + label + "</button>";
+    };
+    let grid = '<div class="heat" role="table" aria-label="最近几周完成情况"><span class="hh"></span>' +
+      ["一", "二", "三", "四", "五", "六", "日"].map(function (x) { return '<span class="hh">' + x + "</span>"; }).join("");
+    Today.weeks(5, nowD()).forEach(function (wk, wi, all) {
+      grid += '<span class="hh">' + (wi === all.length - 1 ? "本周" : "前" + (all.length - 1 - wi)) + "</span>";
+      wk.forEach(function (c) {
+        const full = !c.fut && c.t > 0 && c.c === c.t;
+        const cls = "cell" + (c.fut ? " fut" : full ? " full" : c.c ? " part" : " zero") + (c.today ? " today" : "") + (c.m === "self" ? " self" : "");
+        grid += '<span class="' + cls + '" title="' + c.date + (c.m === "self" ? " 自己带" : "") + "：" + c.c + "/" + c.t + '">' +
+          (c.fut ? "" : full ? svgIc("check") : c.c + "/" + c.t) + "</span>";
+      });
+    });
+    return (
+      "<details open><summary>今天做什么 · 记录</summary>" +
+      '<div class="row segs">' + seg("normal", "普通（拼读 + 读书 + 说 + 写 + 听）") + seg("self", "自己带（周内只读书）") + "</div>" +
+      '<p class="tiny">切模式不改以前的记录；每天按它当天用的模式算。格子里是「完成 / 当天共几项」，绿色 = 全做完，右上小角标 = 当天用的是「自己带」。</p>' +
+      grid + "</div></details>"
+    );
+  }
+
   // ==== 首页 = 全局地图（9 个阶段）→ 点阶段看课程方块 ====
   const STAGE_NAME = [
     "",
@@ -285,7 +1107,6 @@
     "滑动的元音",
     "特殊规则",
   ];
-  let mapStage = null; // null = 地图；1..9 = 展开某阶段的课程列表
   function isDone(no) {
     return progress.done.indexOf(no) >= 0;
   }
@@ -332,6 +1153,7 @@
       total: ls.length,
       state: done === ls.length ? "done" : done > 0 || hasCur ? "on" : "new",
       cur: hasCur,
+      today: ls.some(function (x) { return x.no === todayLessonNo(); }),
       weak: weak,
     };
   }
@@ -353,13 +1175,11 @@
     const s = stageInfo(n);
     const st = stageTest(n);
     return (
-      '<button class="scard ' +
+      '<div class="sw"><button class="scard ' +
       s.state +
-      (s.cur ? " cur" : "") +
+      (s.today ? " cur" : "") +
       '" data-act="stage" data-n="' +
       n +
-      '" style="--c:' +
-      stageColor(n) +
       '" aria-label="阶段 ' +
       n +
       " " +
@@ -389,8 +1209,13 @@
       s.done +
       "/" +
       s.total +
-      "</b></span></button>"
+      "</b></span></button>" +
+      (s.today ? walkerBtn() : "") +
+      "</div>"
     );
+  }
+  function walkerBtn() {
+    return '<button class="me walk" data-act="go-today" aria-label="回到今天">' + svgIc("walker") + "</button>";
   }
   function lessonSquareHTML(l) {
     const tier = lessonTier(l.no);
@@ -401,11 +1226,11 @@
       })
       .join(" ");
     return (
-      '<button class="lsq' +
+      '<div class="lw"><button class="lsq' +
       (isDone(l.no) ? " done" : "") +
       (tier ? " t-" + tier : "") +
       (l.kind === "review" ? " rev" : "") +
-      (l.no === progress.cur ? " cur" : "") +
+      (l.no === todayLessonNo() ? " cur" : "") +
       '" data-act="enter" data-n="' +
       l.no +
       '" aria-label="第 ' +
@@ -419,105 +1244,11 @@
       "</span>" +
       (isDone(l.no) ? '<span class="lmark">' + I.check + "</span>" : "") +
       (Quiz.isStageLast(l) ? '<span class="lflag">' + FLAG + "</span>" : "") +
-      "</button>"
-    );
-  }
-  function stageViewHTML(n) {
-    const s = stageInfo(n);
-    return (
-      '<div class="top"><button class="round" data-act="map" aria-label="回地图">' +
-      I.back +
-      '</button><span class="stitle" style="--c:' +
-      stageColor(n) +
-      '"><span class="snum">' +
-      n +
-      "</span>" +
-      esc(STAGE_NAME[n]) +
-      "<b>" +
-      s.done +
-      "/" +
-      s.total +
-      "</b></span>" +
-      flagHTML(stageTest(n)) +
-      "</div>" +
-      '<div class="lgrid" style="--c:' +
-      stageColor(n) +
-      '">' +
-      s.ls.map(lessonSquareHTML).join("") +
+      "</button>" +
+      (l.no === todayLessonNo() ? walkerBtn() : "") +
       "</div>"
     );
   }
-  function homeHTML() {
-    if (mapStage) return stageViewHTML(mapStage);
-    const doneN = progress.done.length;
-    const pctN = Math.round((doneN / L.length) * 100);
-    let hero;
-    if (finished()) {
-      hero =
-        '<div class="hero"><button class="go" data-act="replay-all" aria-label="再来一遍"><span class="gplay">' +
-        I.play +
-        '</span><span class="gtxt">🎉🏆🎉</span></button></div>';
-    } else {
-      const l = curLesson();
-      let tiles = "";
-      if (l.kind === "review") {
-        tiles += '<span class="tile review">' + I.cards + "</span>";
-        l.weekUnits.slice(0, 5).forEach(function (u) {
-          tiles += '<span class="tile review">' + esc(U[u].g) + "</span>";
-        });
-      } else {
-        (l.units.length ? l.units : l.focus).forEach(function (u) {
-          tiles +=
-            '<span class="tile' +
-            (l.units.length ? "" : " review") +
-            '">' +
-            esc(U[u].g) +
-            "</span>";
-        });
-      }
-      l.newSight.forEach(function (w) {
-        tiles += '<span class="tile sight">' + sightHTML(w) + "</span>";
-      });
-      hero =
-        '<div class="hero"><button class="go" data-act="start" aria-label="继续第 ' +
-        l.no +
-        ' 课" style="--c:' +
-        stageColor(l.stage) +
-        '"><span class="gplay">' +
-        I.play +
-        '</span><span class="gtxt">' +
-        (l.kind === "review" ? "🔁 " : "") +
-        "<b>" +
-        l.no +
-        '</b></span><span class="gtiles">' +
-        tiles +
-        "</span></button></div>";
-    }
-    let cards = "";
-    for (let n = 1; n <= 9; n++) cards += stageCardHTML(n);
-    return (
-      '<div class="top"><div class="total" aria-label="总进度 ' +
-      doneN +
-      " / " +
-      L.length +
-      '"><b>' +
-      doneN +
-      "</b><span>/ " +
-      L.length +
-      '</span><span class="tbar"><i style="width:' +
-      pctN +
-      '%"></i></span><em>' +
-      pctN +
-      '%</em></div><button class="round small" data-act="parent" aria-label="家长">' +
-      I.gear +
-      "</button></div>" +
-      hero +
-      '<div class="smap">' +
-      cards +
-      "</div>"
-    );
-  }
-
   // ==== 课程：顶部条（关闭 + 步骤点）====
   function topbar() {
     const dots = S.steps
@@ -539,7 +1270,7 @@
       '<div class="dots">' +
       dots +
       "</div>" +
-      '<span style="width:64px"></span></div>'
+      '<span class="lt-sp"></span></div>'
     );
   }
   function nextBtn(act, label) {
@@ -564,11 +1295,12 @@
   function flashHTML() {
     const c = S.deck[S.di];
     const face = c.type === "unit" ? esc(c.u.g) : sightHTML(c.w);
-    const cls = c.type === "sight" ? ' style="font-size:clamp(90px,22vw,150px)"' : "";
+    const cls = c.type === "sight" ? " sightf" : "";
     return (
       topbar() +
-      '<div class="stage-body"><button class="flash" data-act="flash-hear"' +
+      '<div class="stage-body"><button class="flash' +
       cls +
+      '" data-act="flash-hear"' +
       ' aria-label="听">' +
       face +
       '<span class="ear">' +
@@ -641,7 +1373,7 @@
           "</b>：" +
           esc(u.tip || "—") +
           (u.warn
-            ? ' <span style="color:#c0392b">⚠ ' + esc(u.warn) + "</span>"
+            ? ' <span class="warnt">⚠ ' + esc(u.warn) + "</span>"
             : "") +
           "</p>"
         );
@@ -804,6 +1536,32 @@
       "</table>"
     );
   }
+  // 家长面板：目标 / 补勾最近 7 天 / 读过的书
+  function modulesParentHTML() {
+    const goalRow = [["read", "阅读 每月几本"], ["listen", "听力 每周几天"], ["say", "说 每周几天"], ["write", "写 每周几天"]].map(function (g) {
+      return '<label>' + g[1] + ' <input type="number" id="goal-' + g[0] + '" min="1" max="' + (g[0] === "read" ? 31 : 7) + '" value="' + Mod.goal(g[0]) + '"></label>';
+    }).join(" ");
+    let mk = "";
+    for (let i = 1; i <= 7; i++) {
+      const info = Today.day(Today.ds(Today.addDays(nowD(), -i)), todayKey());
+      mk += '<div class="row mkrow"><span class="mkd">' + info.mon + "/" + info.dom + " 周" + WD[info.dow] + "</span>" +
+        info.P.map(function (x) {
+          const on = Today.isDone(info.date, x.k);
+          return '<button class="pbtn' + (on ? " on" : "") + '" data-act="mk-toggle" data-d="' + info.date + '" data-k="' + x.k + '" aria-pressed="' + on + '">' + esc(x.cap) + (on && Today.isMakeup(info.date, x.k) ? "（补）" : "") + "</button>";
+        }).join("") + "</div>";
+    }
+    const books = Mod.bookList().map(function (b) {
+      return '<div class="row"><span class="mkd">' + Number(b.d.slice(5, 7)) + "/" + Number(b.d.slice(8, 10)) + '</span><input type="text" id="bk-t-' + b.i + '" value="' + esc(b.t) + '" placeholder="书名（可不填）" maxlength="60" style="flex:1;min-width:0"><button class="pbtn danger" data-act="bk-del" data-i="' + b.i + '">删</button></div>';
+    }).join("");
+    return (
+      "<details open><summary>目标 · 补勾 · 读过的书</summary>" +
+      '<div class="row">' + goalRow + "</div>" +
+      '<p class="tiny">目标显示在首页左侧模块上；每勾一次「听」算 15 分钟。</p>' +
+      "<p><b>补勾最近 7 天</b>（孩子不能补过去的日子；补的会标「补」，不删原来的空白记录）</p>" + mk +
+      '<p><b>读过的书</b>（孩子在「读书」卡勾完后点＋1 本；这里可加书名、删错记的）</p>' + books +
+      '<div class="row"><button class="pbtn" data-act="bk-add-p">＋ 记一本（今天）</button></div></details>'
+    );
+  }
   function parentHTML() {
     const v = Snd.currentVoice();
     const stageFirst = [];
@@ -825,14 +1583,18 @@
       I.close +
       "</button></h2>" +
       '<div class="row"><button class="pbtn on" data-act="mastery">掌握情况（成绩 / 薄弱音 / 复制给老师）</button></div>' +
+      todayParentHTML() +
+      modulesParentHTML() +
       "<details><summary>怎么用</summary><ul>" +
+      "<li>首页上方是按天的点线带（一周 7 天一组，滑动看过去和接下来；周日位置的奖杯 = 这周 7 天全做完），左边是各模块的进度（要再练 / 拼读 / 阅读 / 听力 / 说 / 写），主区是选中那天的任务：拼读（点进去学今天这课，学完自动打勾）、读书、说、写（打开抄写单）、听；孩子点卡就勾、再点取消，全勾完有奖励。过去的日子孩子不能补，家长在本面板「补勾」里补。「自己带」模式见本面板。齿轮要按住 3 秒才打开。</li>" +
       "<li>每天点首页的大绿钮，学一课，大约 10 分钟：① 闪卡复习旧音 ② 听新音 ③ 拼读词。学完点 ✓，明天进入下一课。</li>" +
       "<li>每 5 课有 1 课「复习课」（对照表里的「每周五只复习」），不学新音，课末做约 10 题的周测；每课学完有 6 题小测；每个阶段最后一课再加阶段测（读对 80% 以上算过关，没到只提示先复习哪些音，不锁课）。</li>" +
       "<li>小测三种题：听音选字母、听词选词（选项只差一个音）、读给家长听（含无意义的「外星词」，孩子读出声，家长点「读对 / 读错」）。答错时孩子只会听到正确答案并再试一次，看不到红叉和扣分。</li>" +
       "<li>第 2 阶段起词的拆法：一个圆点 = 一个音，短横 = 两个字母读一个音，灰色字母不发音。</li>" +
       "<li>家长先用「慢慢拼」▶ 带读，再让孩子自己指着点；要求他先拼再读，不要猜。</li>" +
       "<li>进度只存在这台设备的浏览器里：Mac 和 iPad 各存各的；清除网站数据会回到第 1 课。</li>" +
-      "<li>iPad 听不到声音：先看侧边静音开关 / 音量，再点一下屏幕。</li></ul></details>" +
+      "<li>iPad 听不到声音：先看侧边静音开关 / 音量，再点一下屏幕。</li>" +
+      "<li>iPad 上像 App 一样用：用 Safari 打开网址 → 点分享 → 添加到主屏幕。（主屏幕图标是另一份存储，进度不会从 Safari 带过去。）</li></ul></details>" +
       "<details open><summary>进度（现在：第 " +
       Math.min(progress.cur, L.length) +
       " 课 / 共 " +
@@ -893,15 +1655,15 @@
   let owlTk = 0;
   function owlSVG(cls) {
     return '<svg class="owl ' + (cls || "") + (talking ? " talking" : "") + '" viewBox="0 0 120 150" aria-hidden="true">' +
-      '<path d="M20 44L28 12 50 30z" fill="#8a5a33"/><path d="M100 44L92 12 70 30z" fill="#8a5a33"/>' +
-      '<ellipse cx="14" cy="96" rx="11" ry="26" fill="#8a5a33"/><ellipse cx="106" cy="96" rx="11" ry="26" fill="#8a5a33"/>' +
-      '<ellipse cx="60" cy="88" rx="46" ry="54" fill="#a9794a"/><ellipse cx="60" cy="106" rx="30" ry="34" fill="#f3dcb4"/>' +
-      '<circle cx="40" cy="66" r="21" fill="#fff"/><circle cx="80" cy="66" r="21" fill="#fff"/>' +
-      '<circle cx="43" cy="68" r="10" fill="#2b2b3a"/><circle cx="77" cy="68" r="10" fill="#2b2b3a"/>' +
-      '<circle cx="47" cy="64" r="3.5" fill="#fff"/><circle cx="81" cy="64" r="3.5" fill="#fff"/>' +
-      '<circle class="cheek" cx="22" cy="86" r="8" fill="#ff9db8"/><circle class="cheek" cx="98" cy="86" r="8" fill="#ff9db8"/>' +
-      '<g class="beak"><path d="M51 80h18l-9 16z" fill="#ff9f1c"/></g>' +
-      '<path d="M44 140l-6 8M54 142l-2 8M66 142l2 8M76 140l6 8" stroke="#ff9f1c" stroke-width="4" stroke-linecap="round"/></svg>';
+      '<path class="o-wing" d="M20 44L28 12 50 30z"/><path class="o-wing" d="M100 44L92 12 70 30z"/>' +
+      '<ellipse class="o-wing" cx="14" cy="96" rx="11" ry="26"/><ellipse class="o-wing" cx="106" cy="96" rx="11" ry="26"/>' +
+      '<ellipse class="o-body" cx="60" cy="88" rx="46" ry="54"/><ellipse class="o-belly" cx="60" cy="106" rx="30" ry="34"/>' +
+      '<circle class="o-eye" cx="40" cy="66" r="21"/><circle class="o-eye" cx="80" cy="66" r="21"/>' +
+      '<circle class="o-pupil" cx="43" cy="68" r="10"/><circle class="o-pupil" cx="77" cy="68" r="10"/>' +
+      '<circle class="o-shine" cx="47" cy="64" r="3.5"/><circle class="o-shine" cx="81" cy="64" r="3.5"/>' +
+      '<circle class="cheek" cx="22" cy="86" r="8"/><circle class="cheek" cx="98" cy="86" r="8"/>' +
+      '<g class="beak"><path class="o-beak" d="M51 80h18l-9 16z"/></g>' +
+      '<path class="o-leg" d="M44 140l-6 8M54 142l-2 8M66 142l2 8M76 140l6 8"/></svg>';
   }
   function owlRow(bubble, cls) {
     return '<div class="owlrow"><button class="owlbtn" data-act="owl" aria-label="猫头鹰：点我再说一遍">' + owlSVG(cls) +
@@ -1218,7 +1980,7 @@
     const weak = st.filter(function (s) { return s.weak; });
     const rows = st.map(function (s) {
       const rc = s.recent.map(function (x) { return x ? "✓" : "✗"; }).join(" ");
-      return "<tr" + (s.weak ? ' style="background:#fff4e5"' : "") + "><td>" + esc(Quiz.label(s.id)) + "</td><td>" + pct(s) + (s.n ? "（" + s.ok + "/" + s.n + "）" : "") + "</td><td>" + (rc || "—") + "</td><td>" + (s.weak ? "⚠ 薄弱" : "") + "</td></tr>";
+      return "<tr" + (s.weak ? ' class="weakrow"' : "") + "><td>" + esc(Quiz.label(s.id)) + "</td><td>" + pct(s) + (s.n ? "（" + s.ok + "/" + s.n + "）" : "") + "</td><td>" + (rc || "—") + "</td><td>" + (s.weak ? "⚠ 薄弱" : "") + "</td></tr>";
     }).join("");
     const qs = Quiz.records().quizzes.slice().reverse().slice(0, 30).map(function (q) {
       return "<tr><td>" + Quiz.dateStr(q.ts) + "</td><td>第 " + q.lesson + " 课</td><td>" + Quiz.KIND[q.kind] + "</td><td>" + q.score + " / " + q.total + "</td></tr>";
@@ -1229,7 +1991,7 @@
       "<p>已学完 " + done + " 课 / 共 " + L.length + " 课。薄弱音：" + (weak.length ? weak.map(function (s) { return "<b>" + esc(Quiz.label(s.id)) + "</b>"; }).join("、") : "暂无") + "</p>" +
       '<p class="tiny">薄弱 = 答过至少 2 次且正确率低于 80%，或最近 4 次里错了 2 次以上。只统计每道题第一次作答。</p>' +
       '<div class="row"><button class="pbtn on" data-act="copy">复制给老师</button>' + (copyState === "ok" ? '<span class="tiny">已复制 ✓</span>' : "") + '<button class="pbtn" data-act="parent-back">返回</button></div>' +
-      (copyState === "fail" ? '<p class="tiny">这台设备不让网页写剪贴板，请长按下面的文字全选后复制：</p><textarea id="copybox" readonly rows="10" style="width:100%;font-size:13px">' + esc(text) + "</textarea>" : "") +
+      (copyState === "fail" ? '<p class="tiny">这台设备不让网页写剪贴板，请长按下面的文字全选后复制：</p><textarea id="copybox" readonly rows="10">' + esc(text) + "</textarea>" : "") +
       "<details open><summary>每个音</summary><table><tr><th>音</th><th>正确率</th><th>最近几次</th><th></th></tr>" + (rows || '<tr><td colspan="4">还没有数据</td></tr>') + "</table></details>" +
       "<details open><summary>小测记录</summary><table><tr><th>日期</th><th>课</th><th>类型</th><th>得分</th></tr>" + (qs || '<tr><td colspan="4">还没做过</td></tr>') + "</table></details>" +
       "</div></div>";
@@ -1246,9 +2008,17 @@
 
   // ==== 渲染 ====
   function render() {
+    // 重画整页前记住：点线带的横向位置、家长面板的纵向滚动位置
+    const oldBand = $app.querySelector(".dband");
+    if (oldBand) bandLeft = oldBand.scrollLeft;
+    const oldPar = $app.querySelector(".parent");
+    const parTop = oldPar ? oldPar.scrollTop : 0;
     let h;
-    if (!S) h = homeHTML();
-    else {
+    if (!S && view === "sheet") h = sheetHTML();
+    else if (!S) {
+      h = '<div class="page' + (nav ? " z" + nav : "") + '">' + homeHTML() + "</div>";
+      nav = "";
+    } else {
       const st = curStep();
       h =
         st === "flash"
@@ -1267,7 +2037,22 @@
         ? parentHTML()
         : overlay === "mastery"
           ? masteryHTML()
-          : "");
+          : "") +
+      (reward && !S ? rewardHTML() : "") +
+      (hint ? '<div class="toast" role="status">' + esc(hint) + "</div>" : "");
+    const band = $app.querySelector(".dband");
+    if (band) {
+      const tn = band.querySelector(".dn.today");
+      if (bandLeft === null && tn) bandLeft = Math.max(0, tn.getBoundingClientRect().left - band.getBoundingClientRect().left + band.scrollLeft - (band.clientWidth - tn.offsetWidth) / 2);
+      band.scrollLeft = bandLeft || 0;
+    }
+    const newPar = $app.querySelector(".parent");
+    if (newPar && oldPar) newPar.scrollTop = parTop;
+    if (scrollCur) {
+      scrollCur = false;
+      const c = !S && homeView === "stage" ? $app.querySelector(".lsq.cur") : null;
+      if (c && c.scrollIntoView) c.scrollIntoView({ block: "center" });
+    }
   }
 
   // ==== 动作 ====
@@ -1298,7 +2083,6 @@
     saveProgress();
     S = null;
     overlay = null;
-    mapStage = null;
     render();
   }
   const actions = {
@@ -1315,22 +2099,119 @@
       slowToken++;
       stopOwl();
       S = null;
-      mapStage = null;
+      view = null;
+      render();
+    },
+    "go-today": function () {
+      selDay = null;
+      if (homeView !== "today") {
+        setHomeView("today");
+        nav = "in";
+        window.scrollTo(0, 0);
+      }
+      render();
+    },
+    "go-all": function () {
+      if (homeView !== "all") {
+        setHomeView("all");
+        nav = "out";
+        window.scrollTo(0, 0);
+      }
       render();
     },
     stage: function (el) {
-      mapStage = +el.dataset.n;
+      const n = +el.dataset.n;
+      if (homeView !== "stage" || mapStage !== n) {
+        setHomeView("stage", n);
+        nav = "out";
+        scrollCur = true;
+        window.scrollTo(0, 0);
+      }
       render();
     },
-    map: function () {
-      mapStage = null;
+    // 点线带上点一天：主区切到那一天（今天可做 / 过去只读 / 未来只预览）
+    day: function (el) {
+      const d = el.dataset.d;
+      selDay = d === todayKey() ? null : d;
+      if (homeView !== "today") setHomeView("today");
+      render();
+    },
+    // 左侧模块栏：拼读 = 9 阶段总图；其余进各自的视图
+    mod: function (el) {
+      const m = el.dataset.m;
+      if (m === "phon") {
+        actions["go-all"]();
+        return;
+      }
+      selDay = null;
+      setHomeView(m);
+      nav = "out";
+      window.scrollTo(0, 0);
+      render();
+    },
+    "rv-go": function (el) {
+      const n = +el.dataset.n;
+      if (n) startLesson(L[n - 1]); // 去练那一课：和从地图进旧课一样，不改「当前课」
+    },
+    "bk-add": function () {
+      Mod.addBook(todayKey(), "");
+      flashHint("记了 1 本，本月 " + Mod.monthCount(todayKey()) + " 本");
+    },
+    "t-ro": function (el) {
+      flashHint(el.dataset.kind === "fut" ? "还没到这一天" : "过去的日子不能自己补，请家长补");
+    },
+    "mk-toggle": function (el) {
+      Today.set(el.dataset.d, el.dataset.k, !Today.isDone(el.dataset.d, el.dataset.k), 0, { makeup: true });
+      render();
+    },
+    "bk-add-p": function () {
+      Mod.addBook(todayKey(), "");
+      render();
+    },
+    "bk-del": function (el) {
+      Mod.delBook(+el.dataset.i);
       render();
     },
     enter: function (el) {
       startLesson(L[+el.dataset.n - 1]); // 直接进这一课，不改「当前课」，已学完的标记也不动
     },
-    parent: function () {
-      overlay = "parent";
+    "t-card": function (el) {
+      const k = el.dataset.k;
+      setTick(k, !Today.isDone(todayKey(), k));
+      render();
+      const c = $app.querySelector('.tcard[data-k="' + k + '"]');
+      if (c && Today.isDone(todayKey(), k)) c.classList.add("pop");
+    },
+    "t-phon": function () {
+      // 在清单上不能取消；已勾过再点 = 重看今天这课（不改进度）
+      const no = Today.isDone(todayKey(), "phon") ? Today.lessonOf(todayKey()) : 0;
+      startLesson(no ? L[no - 1] : curLesson());
+    },
+    "t-write": function () {
+      view = "sheet";
+      render();
+    },
+    "t-sheet-back": function () {
+      view = null;
+      render();
+    },
+    "t-sheet-done": function () {
+      setTick("write", !Today.isDone(todayKey(), "write"));
+      render();
+    },
+    "t-print": function () {
+      try {
+        window.print();
+      } catch (e) {
+        /* 打印被浏览器拦了就算了 */
+      }
+    },
+    "t-mode": function (el) {
+      Today.setMode(el.dataset.v);
+      render();
+    },
+    "t-reward-close": function () {
+      reward = false;
       render();
     },
     "parent-close": function () {
@@ -1421,8 +2302,16 @@
       if (S.L.no >= progress.cur) progress.cur = S.L.no + 1;
       if (progress.done.indexOf(S.L.no) < 0) progress.done.push(S.L.no);
       saveProgress();
+      // 学完一课 → 今天清单里的「拼读」自动打勾（只有清单里有拼读的日子才记）
+      const doneNo = S.L.no;
       S = null;
-      mapStage = null;
+      if (todayPlan().some(function (x) { return x.k === "phon"; })) {
+        const date = todayKey(),
+          P = todayPlan(),
+          was = Today.allDone(date, P);
+        Today.set(date, "phon", true, doneNo);
+        if (!was && Today.allDone(date, P)) showReward();
+      }
       render();
     },
     again: function () {
@@ -1498,10 +2387,77 @@
       Snd.settings.voiceURI = ev.target.value;
       Snd.saveSettings();
     }
+    const id = ev.target.id || "";
+    if (id.indexOf("goal-") === 0) Mod.setGoal(id.slice(5), ev.target.value); // 不重画，免得输入框丢焦点；关面板时刷新
+    if (id.indexOf("bk-t-") === 0) Mod.setBookTitle(+id.slice(5), ev.target.value.trim());
     if (ev.target.id === "ratesel") {
       Snd.settings.rate = +ev.target.value;
       Snd.saveSettings();
     }
+  });
+
+  // ==== 家长齿轮：长按 3 秒才打开（防孩子误开）；键盘：按住 Enter / 空格 ====
+  let hold = null; // { el, t, at }
+  function holdStart(el) {
+    if (hold) return;
+    el.classList.add("holding");
+    hold = {
+      el: el,
+      at: Date.now(),
+      t: setTimeout(function () {
+        const h = hold;
+        hold = null;
+        if (h) h.el.classList.remove("holding");
+        overlay = "parent";
+        render();
+      }, HOLD_MS),
+    };
+  }
+  function holdCancel(short) {
+    if (!hold) return;
+    clearTimeout(hold.t);
+    hold.el.classList.remove("holding");
+    hold = null;
+    if (short) {
+      // 短按：什么也不发生，只轻轻提示一下
+      hint = "家长设置：按住齿轮 3 秒";
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(function () {
+        hint = "";
+        const t = $app.querySelector(".toast");
+        if (t) t.remove();
+      }, 1800);
+      render();
+    }
+  }
+  document.addEventListener("pointerdown", function (ev) {
+    const el = ev.target.closest && ev.target.closest("[data-hold]");
+    if (el) holdStart(el);
+  });
+  ["pointerup", "pointercancel"].forEach(function (t) {
+    document.addEventListener(t, function () {
+      holdCancel(true);
+    });
+  });
+  document.addEventListener("pointerout", function (ev) {
+    if (!hold) return;
+    const to = ev.relatedTarget;
+    if (ev.target === hold.el || hold.el.contains(ev.target)) if (!to || !hold.el.contains(to)) holdCancel(false);
+  });
+  document.addEventListener("contextmenu", function (ev) {
+    if (ev.target.closest && ev.target.closest("[data-hold]")) ev.preventDefault();
+  });
+  document.addEventListener("keydown", function (ev) {
+    const el = ev.target.closest && ev.target.closest("[data-hold]");
+    if (!el || (ev.key !== "Enter" && ev.key !== " ")) return;
+    ev.preventDefault();
+    if (!ev.repeat) holdStart(el);
+  });
+  document.addEventListener("keyup", function (ev) {
+    if (hold && (ev.key === "Enter" || ev.key === " ")) holdCancel(true);
+  });
+  window.addEventListener("blur", function () {
+    holdCancel(false);
   });
 
   // ==== 启动 ====

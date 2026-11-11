@@ -1254,7 +1254,11 @@
     snap: "🫰",
   };
 
+  // 生僻词标记：抄写单不选这些词（练习词里照常出现，只是不让孩子抄）
+  const RARE = ["sap", "nip"];
+
   G.Curriculum = {
+    RARE: RARE,
     EMO: EMO,
     U: U,
     lessons: lessons,
